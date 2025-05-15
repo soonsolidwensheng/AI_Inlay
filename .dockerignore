@@ -1,0 +1,14 @@
+.vscode
+.gitignore
+2.83
+*.pyc
+thickness_py
+inlay_gpu_api.py
+pypruners.py
+pypruners.cpython-38-x86_64-linux-gnu.so
+pruners.cpython-38-x86_64-linux-gnu.so
+run.sh
+test_*.py
+test_data
+result
+local_test.py

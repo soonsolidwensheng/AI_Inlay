@@ -1,0 +1,8 @@
+modal
+open3d
+trimesh==3.23.5
+DracoPy
+numpy==1.24.4
+bpy==4.2.0
+networkx==3.4.2
+rtree==1.4.0
