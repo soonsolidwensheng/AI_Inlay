@@ -26,7 +26,7 @@ jobs:
         run: |
           rsync -av --delete \
             --exclude='Dockerfile' \          # 排除
-            ./ target-dir/      # 注意结尾斜杠表示同步目录内容
+            / target-dir/      # 注意结尾斜杠表示同步目录内容
 
       # 4. 提交并推送更改
       - name: Commit and push changes
