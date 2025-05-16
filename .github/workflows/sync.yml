@@ -15,16 +15,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
+        with:
+          path: src-dir
       - name: Clone target repo
         run: |
           git clone https://${{ github.actor }}:${{ secrets.ACCESS_TOKEN }}@github.com/soonsolidwensheng/AI_Crown.git target-dir
           
       - name: Sync files with rsync
         run: |
-          echo "$GITHUB_WORKSPACE/src-dir/" 
-          pwd
-          rsync -av --delete --exclude='Dockerfile' ./ target-dir/      
+          sudo rsync -av --delete --exclude='Dockerfile' --exclude='.git/*' src-dir/ target-dir/      
 
       - name: Commit and push changes
         run: |
