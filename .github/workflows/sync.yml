@@ -25,8 +25,8 @@ jobs:
       # 3. 使用 rsync 同步文件（排除示例）
       - name: Sync files with rsync
         run: |
-          rsync -av --delete \
-            --exclude='Dockerfile' \          # 排除
+          echo "$GITHUB_WORKSPACE/src-dir/" 
+          rsync -av --delete --exclude='Dockerfile' \          # 排除
             $GITHUB_WORKSPACE/src-dir/ target-dir/      
 
       # 4. 提交并推送更改
