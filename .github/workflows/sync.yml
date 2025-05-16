@@ -1,4 +1,5 @@
-name: Sync with rsync
+name: Sync code
+
 on:
   workflow_dispatch:
     inputs:
