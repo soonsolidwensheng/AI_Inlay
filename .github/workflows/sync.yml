@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       target_branch:
-        description: '输入要运行的分支名'
+        description: 'input branch'
         required: true
-        default: 'dev'
+        default: 'main'
 
 jobs:
   sync:
