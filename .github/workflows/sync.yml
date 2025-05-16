@@ -15,8 +15,6 @@ jobs:
       # 1. 检出源项目代码
       - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          path: source-dir  # 指定检出目录
 
       # 2. 克隆目标仓库（需认证）
       - name: Clone target repo
