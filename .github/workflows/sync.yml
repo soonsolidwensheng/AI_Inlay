@@ -23,8 +23,7 @@ jobs:
           
       - name: Sync files with rsync
         run: |
-          sudo rsync -av --delete --exclude='Dockerfile' \
-          --exclude='.*' \       src-dir/ target-dir/      
+          sudo rsync -av --delete --exclude='Dockerfile' --exclude='.*'    src-dir/ target-dir/      
 
       - name: Commit and push changes
         run: |
