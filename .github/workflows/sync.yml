@@ -14,7 +14,7 @@ jobs:
     steps:
       # 1. 检出源项目代码
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       # 2. 克隆目标仓库（需认证）
       - name: Clone target repo
@@ -26,7 +26,7 @@ jobs:
         run: |
           rsync -av --delete \
             --exclude='Dockerfile' \          # 排除
-            / target-dir/      # 注意结尾斜杠表示同步目录内容
+            ./ target-dir/      
 
       # 4. 提交并推送更改
       - name: Commit and push changes
