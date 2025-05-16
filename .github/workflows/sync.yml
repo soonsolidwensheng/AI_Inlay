@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 1. 检出源项目代码
-      - name: Checkout source repo
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           path: source-dir  # 指定检出目录
@@ -20,7 +20,7 @@ jobs:
       # 2. 克隆目标仓库（需认证）
       - name: Clone target repo
         run: |
-          git clone https://${{ github.actor }}:${{ secrets.ACCESS_TOKEN }}@github.com/目标用户名/目标仓库.git target-dir
+          git clone https://${{ github.actor }}:${{ secrets.ACCESS_TOKEN }}@github.com/soonsolidwensheng/AI_Crown.git target-dir
           
       # 3. 使用 rsync 同步文件（排除示例）
       - name: Sync files with rsync
