@@ -5,7 +5,7 @@ on:
       target_branch:
         description: '输入要运行的分支名'
         required: true
-        default: 'dev
+        default: 'dev'
 
 jobs:
   sync:
@@ -37,4 +37,4 @@ jobs:
           git config --global user.name "GitHub Actions"
           git add .
           git commit -m "Auto-sync from source repo"
-          git push origin main
+          git push origin ${{ github.event.inputs.target_branch }}
