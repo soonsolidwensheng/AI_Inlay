@@ -1,0 +1,32 @@
+# General
+path: ./
+sub_path: meshes
+draw: False
+isSave: True
+continueFlag: True                      #true: checking ./result/, if result already generated will skipped.
+# Register Settings
+registAlph: 0.8  
+tpsAlpha: 0.01  
+normalSize: 0.5        
+cement_gap: 0.08                       # max cement gap distance
+minimal_gap: 0.04                      # min cement gap distance
+height_of_minimal_gap: 1.0             # cement gap gradually increase until this far from the boundary
+height_of_minimal_gap2: 0.1            # cement gap equals to the min distance until this far from the boundary
+lastSubmehs_tps_num: 500                #last mesh tps sample num
+lastSubmehs_tps_dis: 0.55                
+lastSubmehs_tps_ignoreDis: 0.1          
+stitching_width: 0.07                   # boundary width
+outer_pre_lift_dis: 0.2                # we pre-inflate the outer before margin adaptation for smoother look where the prep meet the inlay 
+boundaryTPS_range: 1.0                 # any vert of the outer shell will be locked during margin adaptation if it's distance to the boundary is greater than this value
+# Thickness Settings
+thickness: 0.6
+boundary_protect_range_offset: 0
+# Adaptation Settings
+isDraw: False
+ad_gap: 0.03              # The gap between the inlay and adjacent teeth, positive value for minor intersection
+ignoreBoundDis: 0.01      # Boundary ignore width
+fixBoundDis: 0.01         # Boundary fix width during adaptation
+insertExport: 0.01        # Collision area spread width
+lastDis: 0.01             # The final collision distance parameters are adjusted <= lastDis
+alph: 0.02                # Iteration step. The smaller, the better effect, but the slower speed, recommended not less than "lastDis"
+ 

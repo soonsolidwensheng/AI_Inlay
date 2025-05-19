@@ -4,15 +4,14 @@ import trimesh
 
 
 class TPS:
-    """The thin plate spline deformation warpping."""
+    """The thin plate spline deformation warpping.
+    """
 
-    def __init__(
-        self,
-        control_points: np.ndarray,
-        target_points: np.ndarray,
-        lambda_: float = 0.0,
-        solver: str = "exact",
-    ):
+    def __init__(self,
+                 control_points: np.ndarray,
+                 target_points: np.ndarray,
+                 lambda_: float = 0.,
+                 solver: str = 'exact'):
         """Create a instance that preserve the TPS coefficients.
 
         Arguments
@@ -30,8 +29,7 @@ class TPS:
         """
         self.control_points = control_points
         self.coefficient = find_coefficients(
-            control_points, target_points, lambda_, solver
-        )
+            control_points, target_points, lambda_, solver)
 
     def __call__(self, source_points):
         """Transform the source points form the original surface to the
@@ -42,7 +40,8 @@ class TPS:
             source_points : np.array
                 n by d array of source points to be transformed
         """
-        return transform(source_points, self.control_points, self.coefficient)
+        return transform(source_points, self.control_points,
+                         self.coefficient)
 
     transform = __call__
 
@@ -95,18 +94,16 @@ def pairwise_radial_basis(K: np.ndarray, B: np.ndarray) -> np.ndarray:
 
     # P correcponds to the matrix K from [1].
     P = np.empty(r_mat.shape)
-    P[pwise_cond_ind1] = (r_mat_p1**2) * np.log(r_mat_p1)
+    P[pwise_cond_ind1] = (r_mat_p1 ** 2) * np.log(r_mat_p1)
     P[pwise_cond_ind2] = r_mat_p2 * np.log(np.power(r_mat_p2, r_mat_p2))
 
     return P
 
 
-def find_coefficients(
-    control_points: np.ndarray,
-    target_points: np.ndarray,
-    lambda_: float = 0.0,
-    solver: str = "exact",
-) -> np.ndarray:
+def find_coefficients(control_points: np.ndarray,
+                      target_points: np.ndarray,
+                      lambda_: float = 0.,
+                      solver: str = 'exact') -> np.ndarray:
     """Given a set of control points and their corresponding points, compute the
     coefficients of the TPS interpolant deforming surface.
 
@@ -137,10 +134,8 @@ def find_coefficients(
     target_points = np.atleast_2d(target_points)
     if control_points.shape != target_points.shape:
         raise ValueError(
-            "Shape of and control points {cp} and target points {tp} are not the same.".format(
-                cp=control_points.shape, tp=target_points.shape
-            )
-        )
+            'Shape of and control points {cp} and target points {tp} are not the same.'.
+                format(cp=control_points.shape, tp=target_points.shape))
 
     p, d = control_points.shape
 
@@ -152,7 +147,10 @@ def find_coefficients(
     K = K + lambda_ * np.identity(p)
 
     # Target points
-    M = np.vstack([np.hstack([K, P]), np.hstack([P.T, np.zeros((d + 1, d + 1))])])
+    M = np.vstack([
+        np.hstack([K, P]),
+        np.hstack([P.T, np.zeros((d + 1, d + 1))])
+    ])
     Y = np.vstack([target_points, np.zeros((d + 1, d))])
     for n in range(M.shape[0]):
         M[n, n] += 1e-6
@@ -160,19 +158,18 @@ def find_coefficients(
     # At least d+1 control points should not be in a subspace; e.g. for d=2, at
     # least 3 points are not on a straight line. Otherwise M will be singular.
     solver = solver.lower()
-    if solver == "exact":
+    if solver == 'exact':
         X = np.linalg.solve(M, Y)
-    elif solver == "lstsq":
+    elif solver == 'lstsq':
         X, _, _, _ = np.linalg.lstsq(M, Y, None)
     else:
-        raise ValueError("Unknown solver: " + solver)
+        raise ValueError('Unknown solver: ' + solver)
 
     return X
 
 
-def transform(
-    source_points: np.ndarray, control_points: np.ndarray, coefficient: np.ndarray
-) -> np.ndarray:
+def transform(source_points: np.ndarray, control_points: np.ndarray,
+              coefficient: np.ndarray) -> np.ndarray:
     """Transform the source points form the original surface to the destination
     (deformed) surface.
 
@@ -194,13 +191,10 @@ def transform(
     control_points = np.atleast_2d(control_points)
     if source_points.shape[-1] != control_points.shape[-1]:
         raise ValueError(
-            "Dimension of source points ({sd}D) and control points ({cd}D) are not the same.".format(
-                sd=source_points.shape[-1], cd=control_points.shape[-1]
-            )
-        )
+            'Dimension of source points ({sd}D) and control points ({cd}D) are not the same.'.
+                format(sd=source_points.shape[-1], cd=control_points.shape[-1]))
 
     n = source_points.shape[0]
-
     A = pairwise_radial_basis(source_points, control_points)
     K = np.hstack([A, np.ones((n, 1)), source_points])
 
@@ -209,8 +203,7 @@ def transform(
 
 
 def tps2(mesh, point_idx, point_dst):
-    """
-
+    '''
     Args:
         mesh: 待变形网格模型
         point_idx: 待变形网格顶点索引 shape:(N)
@@ -218,7 +211,7 @@ def tps2(mesh, point_idx, point_dst):
 
     Returns:
         mesh_out: 变形后的网格模型
-    """
+    '''
     V_tooth = mesh.vertices
     V_tooth1 = mesh.vertices.copy()
     point_src = V_tooth[point_idx]
@@ -256,15 +249,9 @@ def tps2(mesh, point_idx, point_dst):
     az_z = W[-1, 2]
     for n in range(len(V_tooth)):
         nonrigid_x, nonrigid_y, nonrigid_z = 0, 0, 0
-        affine_x = (
-            a1_x + ax_x * V_tooth[n, 0] + ay_x * V_tooth[n, 1] + az_x * V_tooth[n, 2]
-        )
-        affine_y = (
-            a1_y + ax_y * V_tooth[n, 0] + ay_y * V_tooth[n, 1] + az_y * V_tooth[n, 2]
-        )
-        affine_z = (
-            a1_z + ax_z * V_tooth[n, 0] + ay_z * V_tooth[n, 1] + az_z * V_tooth[n, 2]
-        )
+        affine_x = a1_x + ax_x * V_tooth[n, 0] + ay_x * V_tooth[n, 1] + az_x * V_tooth[n, 2]
+        affine_y = a1_y + ax_y * V_tooth[n, 0] + ay_y * V_tooth[n, 1] + az_y * V_tooth[n, 2]
+        affine_z = a1_z + ax_z * V_tooth[n, 0] + ay_z * V_tooth[n, 1] + az_z * V_tooth[n, 2]
         for i in range(point_num):
             diff_p = point_src[i] - V_tooth[n]
             diff = diff_p[0] ** 2 + diff_p[1] ** 2 + diff_p[2] ** 2
@@ -272,23 +259,28 @@ def tps2(mesh, point_idx, point_dst):
             nonrigid_x += W[i, 0] * tps_diff
             nonrigid_y += W[i, 1] * tps_diff
             nonrigid_z += W[i, 2] * tps_diff
-        out = np.array(
-            [[affine_x + nonrigid_x], [affine_y + nonrigid_y], [affine_z + nonrigid_z]]
-        )
+        out = np.array([[affine_x + nonrigid_x], [affine_y + nonrigid_y], [affine_z + nonrigid_z]])
         V_tooth1[n] = out[:, 0]
     mesh_out = trimesh.Trimesh(vertices=V_tooth1, faces=mesh.faces, process=False)
     return mesh_out
 
 
-def tps(mesh, point_idx, point_dst, lambda_=0.5):
+def tps_runner(mesh, point_idx, point_dst, lambda_=0.5):
     trans = TPS(mesh.vertices[point_idx], point_dst, lambda_=lambda_)
-    transformed_xy = trans(mesh.vertices)
-    if type(mesh) is trimesh.Trimesh:
-        return trimesh.Trimesh(transformed_xy, mesh.faces)
-    else:
-        mesh.update_mesh(transformed_xy)
-        return mesh
+    transformed_xyz = trans(mesh.vertices)
+    ret = trimesh.Trimesh(transformed_xyz, mesh.faces)
+    ret.vertex_normals = mesh.vertex_normals
+    return ret
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    """
+    A demo of how to use TPS()
+    """
+    mesh = trimesh.load('cube.obj')
+    point_idx = np.array([0, 1, 2])
+    point_dst = np.array([[0., 0., 0.],[1., 1., 1.],[2., 2., 2.]])
+    trans = TPS(mesh.vertices[point_idx], point_dst)
+    transformed_xyz = trans(mesh.vertices)
+    transformed_mesh = trimesh.Trimesh(transformed_xyz, mesh.faces)
     pass
