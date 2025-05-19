@@ -1,10 +1,26 @@
-import json
 import base64
 import traceback
+
 import DracoPy
 import numpy as np
 import trimesh
-from crown_cpu import stitch_edge
+
+from inlay_cpu import InlayGeneration, MeshRegistration
+
+
+def write_mesh_bytes(mesh, preserve_order=False, colors=None):
+    # 设置 Draco 编码选项
+    encoding_test = DracoPy.encode_mesh_to_buffer(
+        mesh.vertices,
+        mesh.faces,
+        preserve_order=preserve_order,
+        quantization_bits=14,
+        compression_level=10,
+        colors=colors,
+    )
+    b64_bytes = base64.b64encode(encoding_test)
+    b64_str = b64_bytes.decode("utf-8")
+    return b64_str
 
 
 def read_mesh_bytes(buffer):
@@ -12,114 +28,66 @@ def read_mesh_bytes(buffer):
     mesh_object = DracoPy.decode_buffer_to_mesh(a)
     V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
     F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
-    return trimesh.Trimesh(V, F)
+    return trimesh.Trimesh(V, F).as_open3d
 
 
-def write_mesh_bytes(mesh, preserve_order=False, colors=None):
-    # 设置 Draco 编码选项
-    encoding_test = DracoPy.encode_mesh_to_buffer(mesh.vertices, mesh.faces, preserve_order=preserve_order, quantization_bits=14,
-                                                  compression_level=10, colors=colors)
-    b64_bytes = base64.b64encode(encoding_test)
-    b64_str = b64_bytes.decode("utf-8")
-    return b64_str
+def run(data):
+    IG = InlayGeneration(
+        tid=None,
+        prep_tooth=None,
+        inlay_inner=data.get("inner_dilation"),
+        upper_scan=None,
+        lower_scan=None,
+        adjacent_teeth=None,
+        standard=data.get("inlay_outer"),
+    )
+    mesh_registration = MeshRegistration(IG.configs)
+    mesh_registration.get_cement_gap(IG.o3d2tri(IG.inlay_inner))
+    # boundarySet, _ = mesh_registration.getBoundaryPoints(mesh_registration.inner_dilation.as_open3d)
+    # IG.lib_tooth = mesh_registration.doSubMeshTps(boundarySet, IG.lib_tooth, mesh_registration.lastSubmehs_tps_dis)
+    IG.inner_dilation = mesh_registration.inner_dilation
+    IG.inlay_outer = IG.lib_tooth
+    IG.stitch()
 
+    return IG.o3d2tri(IG.get_stitched_inlay()), IG.inner_dilation
 
-def write_drc(drc, file):
-    with open(file, "wb") as test_file:
-        test_file.write(base64.b64decode(drc))
-
-
-def matrix2matrix(crown_rot_matirx):
-    ai_matrix = np.eye(4)  # 创建一个单位矩阵作为变换矩阵的初始值
-    ai_matrix[:3, :3] = crown_rot_matirx  # 复制旋转矩阵的前三列到变换矩阵的前三列
-    ai_matrix[:, 3] = [0, 0, 0, 1]
-    return ai_matrix
-
-def file_name2template_name(file_name):
-    s = file_name.split('_')[0]
-    f2t = {
-        'CSv1': 'Cyber Standard v1',
-        'GSv1': 'Generic Standard v1',
-        'Mv1': 'Mature v1',
-        'rev1': 'st_tooth',
-        'SSv1': 'Soft Standard v1',
-        'Yv1': 'Youth v1'
-        }
-    return f2t[s]
 
 def handler(event, context):
-
     print("receive case")
     try:
-        print('start AI_Crown_Stitch_Edge ..')
-        # 本地rie测试输入
-        # path = r'/media/wanglong/Elements/wanglong/标准牙体库测试结果/1ae8-9331/Mature v1'
-        # inner = trimesh.load(f'{path}/dilation.stl')
-        # inner = write_mesh_bytes(inner)
-        # outer = trimesh.load(f'{path}/trans_neck.stl')
-        # outer = write_mesh_bytes(outer)
-        # event["inner"] = inner
-        # event["out"] = outer
-        # event["align_edges"] = False
-        
-        cpu_input_json = {
-            "inner":event.get('inner'),
-            "out":event.get('out'),
-            "align_edges":event.get('align_edges'),
-        }
-        if 'cpu_info_json' in event.keys():
-            for k, v in event['cpu_info_json'].items():
-                event[k] = v
+        print("start AI_Inlay_Stitch_Edge ..")
+        if event.get("job_id"):
+            print(f"job_id: {event.get('job_id')}")
         else:
-            pass
-        print("pred_filestem_name", event.get("pred_filestem_name"))
-        if event.get("pred_filestem_name"):
-            event["template_name"] = file_name2template_name(event.get("pred_filestem_name"))
-        print("template_name", event.get('template_name'))
-        print("job_id", event.get("job_id"))
-        stitch_out = stitch_edge(event)
-        crown = write_mesh_bytes(stitch_out.mesh)
-        inner = write_mesh_bytes(stitch_out.mesh_beiya)
-        # add_points = np.array(stitch_out.add_points).tolist()
-        # add_point_normal = stitch_out.add_point_normal.tolist()
-        # axis = np.array(stitch_out.axis).tolist()
-        
-        # stitch_out.mesh.export('stitch.stl')
-        
+            print("job_id: None")
+        if event.get("execution_id"):
+            print(f"execution_id: {event.get('execution_id')}")
+        else:
+            print("execution_id: None")
+        data_input = {}
+        data_input["inner_dilation"] = read_mesh_bytes(event.get("inner_dilation"))
+        data_input["inlay_outer"] = read_mesh_bytes(event.get("inlay_outer"))
+        stitch_out = run(data_input)
+
         stitch_json = {
-            'crown':crown,
-            # "points_info":{
-            #     "points": add_points,
-            #     "normals": add_point_normal,
-            #     "axis": axis,
-            # },
-            'inner': inner,
-            'cpu_input_json':cpu_input_json
+            "crown": write_mesh_bytes(stitch_out[0]),
+            "inner_dilation": write_mesh_bytes(stitch_out[1]),
+            "modal_function_call_id": None,
         }
         print("suncess stitch_edge")
-        
-        return {'Msg': {"data": stitch_json}, "Code": 200, "State": "Success"}
+
+        return {"Msg": {"data": stitch_json}, "Code": 200, "State": "Success"}
     except Exception as _:
-        res = {"Msg": traceback.format_exc(), "Code": 203, "State": "Failure"}
+        res = {
+            "error": traceback.format_exc(),
+            "modal_function_call_id": None,
+        }
         traceback.print_exc()
         return res
 
 
 if __name__ == "__main__":
-    import time
-    import os
-    # save_dir = r'test_data_'
-    # case_id = 'fe2ed'
-    # with open(os.path.join(save_dir, case_id, 'crown_post_process (1).json'), 'r') as f:
-    #     event = json.load(f)
-    # with open(os.path.join(save_dir, case_id, 'std.json'), 'r') as f:
-    #     event['mesh_jaw'] = json.load(f)['cpu_std_json']['mesh_jaw']
-    # # read_mesh_bytes(event["fixed_crown"]).export('1.stl')
-    # # read_mesh_bytes(event["crown"]).export('2.stl')
-    # # trimesh.PointCloud(read_mesh_bytes(event["fixed_crown"]).vertices[event['fixed_points']]).export('3.ply')
-    # s1 = time.time()
-    # out = handler(event, os.path.join(save_dir, case_id))
-    # s2 = time.time()
-    # print(s2 - s1)
-    # with open(os.path.join(save_dir, case_id, 'stitch_edge.json'), "w") as f:
-    #     f.write(json.dumps(out["Msg"]["data"]))
+    import json
+    with open('test_data/41b82e63-ac82-4522-b8b5-6012e35445df/post_c005ab3b-0c2a-43d1-81ef-2ab5bf66b884/output.json') as f:
+        event = json.load(f)
+    print(handler(event, None))
