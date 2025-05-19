@@ -1,36 +1,40 @@
-name: Sync code
+
+name: Pull Repository
 
 on:
   workflow_dispatch:
     inputs:
-      target_branch:
-        description: 'input branch'
+      source_branch:
+        description: 'input source branch'
         required: true
         default: 'main'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout code
+      - name: Checkout source repo
         uses: actions/checkout@v3
         with:
-          path: src-dir
-      - name: Clone target repo
+          ref: ${{ github.event.inputs.source_branch }}
+          repository: soonsolidwensheng/AI_Crown.git
+          token: ${{ secrets.ACCESS_TOKEN }}  
+          path: source
+
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+        with:
+          path: target
+
+      - name: Sync files with exclusions
         run: |
-          git clone https://${{ github.actor }}:${{ secrets.ACCESS_TOKEN }}@github.com/soonsolidwensheng/AI_Crown.git target-dir
-          
-      - name: Sync files with rsync
-        run: |
-          sudo rsync -av --delete --exclude='Dockerfile' --exclude='.*'    src-dir/ target-dir/      
+          sudo rsync -av --delete --exclude='Dockerfile' --exclude='.*'    source/ target/   
 
       - name: Commit and push changes
         run: |
-          cd target-dir
-          git checkout -b  ${{ github.event.inputs.target_branch }}
-          git config --global user.email "actions@github.com"
+          cd target
           git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
           git add .
           git commit -m "Auto-sync from source repo"
-          git push origin ${{ github.event.inputs.target_branch }}
+          git push origin ${{ github.event.inputs.source_branch }}
