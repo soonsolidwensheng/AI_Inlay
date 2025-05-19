@@ -1,0 +1,36 @@
+name: Sync code
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: 'input branch'
+        required: true
+        default: 'main'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          path: src-dir
+      - name: Clone target repo
+        run: |
+          git clone https://${{ github.actor }}:${{ secrets.ACCESS_TOKEN }}@github.com/soonsolidwensheng/AI_Crown.git target-dir
+          
+      - name: Sync files with rsync
+        run: |
+          sudo rsync -av --delete --exclude='Dockerfile' --exclude='.*'    src-dir/ target-dir/      
+
+      - name: Commit and push changes
+        run: |
+          cd target-dir
+          git checkout -b  ${{ github.event.inputs.target_branch }}
+          git config --global user.email "actions@github.com"
+          git config --global user.name "GitHub Actions"
+          git add .
+          git commit -m "Auto-sync from source repo"
+          git push origin ${{ github.event.inputs.target_branch }}
