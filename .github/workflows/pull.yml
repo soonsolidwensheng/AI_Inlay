@@ -50,6 +50,6 @@ jobs:
           git add .
           git commit -m "Auto-pull from source repo"
           # 配置远程仓库权限
-          git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git remote set-url origin https://${{ github.actor }}:${{ secrets.TARGET_ACCESS_TOKEN }}@github.com/${{ github.repository }}.git
           # 强制推送更新
           git push origin HEAD:${{ steps.get-branch.outputs.branch_name }} --force
