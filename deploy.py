@@ -1,63 +1,43 @@
-import traceback
-
-import modal
-
-from api import occlusion_msg, postprocess_msg, stdcrown_msg, stitch_edge_msg
-
-image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .run_commands("apt-get update")
-    .run_commands("apt-get -y install xterm xauth openssh-server tmux wget")
-    .run_commands("apt-get install ffmpeg libsm6 libxext6 -y")
-    .run_commands("apt-get update && apt-get install libgl1")
-    .run_commands("apt-get clean")
-    .run_commands("rm -rf /var/lib/apt/lists/*")
-    .pip_install_from_requirements("requirements.txt")
-    .add_local_dir(".", remote_path="/root")
-    .add_local_dir(
-        "object_print3d_utils",
-        remote_path="/usr/lib/python3.11/site-packages/bpy/4.2/scripts/addons/object_print3d_utils",
-    )
-)
-
-app = modal.App("Inlay_Onlay_CPU", image=image)
+from flask import Flask, request
+from stdcrown import handler as std_handler
+from postprocess import handler as post_handler
+from occlusion import handler as occl_handler
+from stitch_edge import handler as stitch_handler
 
 
-@app.function(cpu=16.0, memory=10240)
-@modal.web_endpoint(method="POST")
-def stdcrown(data: dict) -> dict:
-    try:
-        result = stdcrown_msg(data)
-    except Exception:
-        result = {"error": traceback.format_exc()}
-    return result
+app = Flask(__name__)
 
 
-@app.function(cpu=16.0, memory=10240)
-@modal.web_endpoint(method="POST")
-def postprocess(data: dict) -> dict:
-    try:
-        result = postprocess_msg(data)
-    except Exception:
-        result = {"error": traceback.format_exc()}
-    return result
+@app.route("/std_process", methods=["POST"])
+def std_process_handler():
+    event = request.json
+    print("event", event)
+    return std_handler(event, "")
+
+@app.route("/post_process", methods=["POST"])
+def post_process_handler():
+    event = request.json
+    print("event", event)
+    return post_handler(event, "")
 
 
-@app.function(cpu=16.0, memory=10240)
-@modal.web_endpoint(method="POST")
-def occlusion(data: dict) -> dict:
-    try:
-        result = occlusion_msg(data)
-    except Exception:
-        result = {"error": traceback.format_exc()}
-    return result
+@app.route("/occlusion_process", methods=["POST"])
+def occlusion_process_handler():
+    event = request.json
+    print("event", event)
+    return occl_handler(event, "")
 
 
-@app.function(cpu=16.0, memory=10240)
-@modal.web_endpoint(method="POST")
-def stitch_edge(data: dict) -> dict:
-    try:
-        result = stitch_edge_msg(data)
-    except Exception:
-        result = {"error": traceback.format_exc()}
-    return result
+@app.route("/stitch_edge_process", methods=["POST"])
+def stitch_edge_process_handler():
+    event = request.json
+    print("event", event)
+    return stitch_handler(event, "")
+
+
+# WSGI入口函数
+def handler(environ, start_response):
+    return app(environ, start_response)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=9999, threaded=False)
