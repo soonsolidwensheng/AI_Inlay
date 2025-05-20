@@ -14,7 +14,7 @@ COPY . ${FUNCTION_DIR}
 #         awslambdaric
 # Copy and install dependencies first (利用缓存)
 # COPY ./requirements.txt ${FUNCTION_DIR}/requirements.txt
-RUN pip install -r ${FUNCTION_DIR}/requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install -r ${FUNCTION_DIR}/requirements.txt
 
 # RUN sed -i '284s/.*/    return closest, distance, triangle_id/' /usr/local/lib/python3.8/site-packages/trimesh/proximity.py
 # Copy function code
