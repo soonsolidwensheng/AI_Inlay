@@ -183,15 +183,18 @@ def run(data):
     return trimesh.Trimesh(upper_v, upper_f), trimesh.Trimesh(lower_v, lower_f)
 
 
-def run_single(data):
+def run_single(data, only_move=False):
     mesh = data["mesh"]
     if not isinstance(mesh, trimesh.Trimesh):
         mesh = trimesh.Trimesh(np.asarray(mesh.vertices), np.asarray(mesh.triangles))
-    if not mesh.is_watertight:
+    if only_move:
         v, f = mesh.vertices, mesh.faces
-        v, f = repaire_mesh(v, f)
     else:
-        v, f = mesh.vertices, mesh.faces
+        if not mesh.is_watertight:
+            v, f = mesh.vertices, mesh.faces
+            v, f = repaire_mesh(v, f)
+        else:
+            v, f = mesh.vertices, mesh.faces
     return trimesh.Trimesh(v, f)
 
 
@@ -210,6 +213,8 @@ def handler(event, context):
         data_input = {}
         if event.get("single_mesh"):
             data_input["mesh"] = read_mesh_bytes(event.get("mesh"))
+            if event.get("only_remove"):
+                repaired_out = run_single(data_input, only_move=True)
             repaired_out = run_single(data_input)
             repaired_json = {
                 "repaired_mesh": write_mesh_bytes(repaired_out),

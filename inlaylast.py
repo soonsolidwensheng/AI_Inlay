@@ -164,11 +164,11 @@ def scaleEdge(inlay_bm,inlay_bvh, bm):
             
     for v in final_move_list:
         result = inlay_bvh.ray_cast( v.co, -v.normal )
-        print( result )
+        # print( result )
         if result[0] != None:
             
             offset =  result[3] 
-            print('offset', offset )
+            # print('offset', offset )
             if offset > 0:
                 bpy.ops.mesh.select_all(action='DESELECT')
                 v.select_set(True)
@@ -297,7 +297,8 @@ def findNearFaceByPoints(points, bm, inlayObj, p_size=1.0 ):
                     bpy.ops.transform.translate(value=(0.0, 0.0, dist), orient_type='NORMAL', orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=p_size, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
                     f.select_set(False)
             if count > 0:
-                print( 'count', count )
+                pass
+                # print( 'count', count )
 
    
                 
@@ -367,7 +368,7 @@ class InlayAdjust:
     def grooveSphereSort(self, bm ):
         kd = mathutils.kdtree.KDTree(len( self.grooveFaces ))
         for f in self.grooveFaces:
-            print(f)
+            # print(f)
             face_center = bm.faces[f].calc_center_median()
             kd.insert(face_center, f )
         kd.balance()
@@ -611,7 +612,7 @@ class InlayAdjust:
             group_faces[region_id-1].append( face.index )
                 
 
-        print( group_faces )
+        # print( group_faces )
         
     def check(self, thickness = 0.8):
         inlayObj = self.inlayObj
@@ -663,7 +664,7 @@ class InlayAdjust:
         use_groove_center = False
         groove_center = mathutils.Vector((0,0,0))
         if len(self.oc_faces) > 0:
-            print( '****************' )
+            # print( '****************' )
             for i in self.oc_faces:
                 self.groove_faces.append(i)
                 groove_center += crown_bm.faces[i].calc_center_median()
@@ -799,7 +800,7 @@ class InlayAdjust:
             center_loc = center_loc / len(faces)  
             local_dir = local_dir.normalized()
             
-            print( 'num_faces', len(faces) )
+            # print( 'num_faces', len(faces) )
             # rad = local_dir.dot( mathutils.Vector((0,1,0)) ) 
             if len(faces) > ref_numFaces:
                 ref_numFaces = len(faces)
@@ -1273,12 +1274,12 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
             if (need_center_faces[i] - f_center).length < 0.1:
                 face_center = inlay_bm.faces[f_id].calc_center_median()
                 loc, idx,dist = boundary_kd.find(face_center)
-                print( loc, idx, dist )
+                # print( loc, idx, dist )
                 if dist > last_dist and dist > 0.1:
                     last_dist = dist 
                     select_face = f_id
                     
-        print( 'select_face:', select_face, last_dist )
+        # print( 'select_face:', select_face, last_dist )
         if select_face != -1:
             inlay_bm.faces[select_face].select_set(True)
             bpy.ops.transform.translate(value=(0,0,0.1), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=last_dist, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
@@ -1300,9 +1301,9 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
         inlayObj.select_set(False)
         bpy.context.view_layer.objects.active = None
         for i in bpy.data.objects:
-            print( i.name.find( inlayObj.name + '.') )
+            # print( i.name.find( inlayObj.name + '.') )
             if i.name.find( inlayObj.name + '.') >= 0:
-                print( '*********************', i.name, bSmooth )
+                # print( '*********************', i.name, bSmooth )
                 if bSmooth:
                     i.name = 'v2'
                 else:
@@ -1368,7 +1369,7 @@ def inlayPostWarp(surface_verts, surface_faces,inlay_verts, inlay_faces ):
     if bpy.context.mode == 'EDIT_MESH':
         bpy.ops.object.editmode_toggle()
     
-    print( tri_mesh )
+    # print( tri_mesh )
     return tri_mesh
     
 if __name__ == '__main__':

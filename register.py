@@ -319,21 +319,35 @@ class MeshRegistration:
         return poisson_mesh
 
     def calcuBsubQ(self, mesh_b, mesh_q):
-        pcd_b = o3d.geometry.PointCloud()
-        pcd_b.points = mesh_b.vertices
+        scene = o3d.t.geometry.RaycastingScene()
+        scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(mesh_q))
+        closest_points = scene.compute_closest_points(
+            np.asarray(mesh_b.vertices, dtype=np.float32)
+        )
+        points = closest_points['points'].numpy()
+        verts = np.asarray(mesh_b.vertices, dtype=np.float32) - points
+        dis = np.linalg.norm(verts, axis=1)
+        idx = np.where(dis < 0.1)[0]
+        mesh_b.remove_vertices_by_index(idx)
+        pcd_b_q = o3d.geometry.PointCloud()
+        pcd_b_q.points = mesh_b.vertices
+        
+        
+        # pcd_b = o3d.geometry.PointCloud()
+        # pcd_b.points = mesh_b.vertices
         pcd_q = o3d.geometry.PointCloud()
         pcd_q.points = mesh_q.vertices
 
-        pcd_tree = o3d.geometry.KDTreeFlann(pcd_b)
-        boundary_q_index = set()
-        for p in pcd_q.points:
-            [k, idx, _] = pcd_tree.search_knn_vector_3d(p, 1)
-            boundary_q_index.add(idx[0])
+        # pcd_tree = o3d.geometry.KDTreeFlann(pcd_b)
+        # boundary_q_index = set()
+        # for p in pcd_q.points:
+        #     [k, idx, _] = pcd_tree.search_knn_vector_3d(p, 1)
+        #     boundary_q_index.add(idx[0])
 
-        pcd_b_q = o3d.geometry.PointCloud()
-        for i in range(len(pcd_b.points)):
-            if i not in boundary_q_index:
-                pcd_b_q.points.append(pcd_b.points[i])
+        # pcd_b_q = o3d.geometry.PointCloud()
+        # for i in range(len(pcd_b.points)):
+        #     if i not in boundary_q_index:
+        #         pcd_b_q.points.append(pcd_b.points[i])
 
         # calcu boundary point index
         boundary_q_index = list(

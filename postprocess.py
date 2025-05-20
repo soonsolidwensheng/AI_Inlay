@@ -83,19 +83,19 @@ if __name__ == "__main__":
     import json
     import yaml
 
-    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/gpu_7377fc8c-4c35-4d45-969d-50f521dd6493/output.json") as f:
+    with open("test_data/e6a9294b-7324-46a7-87b9-b37196907864/gpu_5fe56b5f-e6fb-4cdd-88fd-e96048128d9c/output.json") as f:
         data = json.load(f)["cpu_process_info"]
     
-    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/post_25ef563e-ba17-4bad-83e3-7e355597a91f/input.json") as f:
+    with open("test_data/e6a9294b-7324-46a7-87b9-b37196907864/post_57c5d7a8-2143-4067-b40b-3f3a6f983330/input.json") as f:
         data_ = json.load(f)
 
     for key in data_:
         data[key] = data_[key]
         
-    # with open("test_data/ali/edge/1923202949555814402/post_1923203407553351680/postCrownInput.json") as f:
+    # with open("test_data/ali/post_error/1924366727035092993/post_1924367556224086016/postCrownInput.json") as f:
     #     data = json.load(f)
     
-    # mesh = trimesh.load('test_data/ali/edge/1923202949555814402/post_1923203407553351680/0_lib_tooth_15.ply')
+    # mesh = trimesh.load('test_data/e6a9294b-7324-46a7-87b9-b37196907864/0_lib_tooth_16.ply')
     # data['stdcrown'] = write_mesh_bytes(mesh)
     
     for i in range(1):
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         # 修改参数
         # config["savePath"] = f"./result/test{i + 110}"
         config["isSave"] = True
-        config["savePath"] = "./result/test_2302911b"
+        config["savePath"] = "./result/test_e6a9294b"
 
         # 保存修改后的 YAML 文件
         with open("configs.yaml", "w") as file:
