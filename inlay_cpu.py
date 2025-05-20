@@ -79,8 +79,8 @@ class InlayGeneration:
                     self.configs[key] = value
 
     def tri2o3d(self, mesh_trimesh):
-        import copy
-
+        if isinstance(mesh_trimesh, open3d.geometry.TriangleMesh):
+            return mesh_trimesh
         vertices = np.asarray(mesh_trimesh.vertices)
         faces = np.asarray(mesh_trimesh.faces)
         vertex_normals = copy.deepcopy(np.asarray(mesh_trimesh.vertex_normals))
@@ -91,6 +91,8 @@ class InlayGeneration:
         return mesh_open3d
 
     def o3d2tri(self, mesh_open3d):
+        if isinstance(mesh_open3d, trimesh.Trimesh):
+            return mesh_open3d
         vertices = np.asarray(mesh_open3d.vertices)
         faces = np.asarray(mesh_open3d.triangles)
         return trimesh.Trimesh(vertices=vertices, faces=faces)
@@ -303,23 +305,35 @@ class InlayGeneration:
         surface_faces = np.array(self.inlay_outer.triangles).astype(np.int32)
         inlay_verts = np.array(self.stitched_inlay.vertices).astype(np.float64)
         inlay_faces = np.array(self.stitched_inlay.triangles).astype(np.int32)
+        inlay_outer = copy.deepcopy(self.inlay_outer)
+        stitched_inlay = copy.deepcopy(self.stitched_inlay)
         self.inlay_outer = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces)
             
         self.stitch()
+        
+        changed_faces = find_changed_faces(
+            self.o3d2tri(inlay_outer), self.inlay_outer
+        )
+        self.thickness_points_id = self.inlay_outer.faces[
+            changed_faces
+        ].reshape(-1)
+        _, self.thickness_points_id = find_new_points(self.stitched_inlay, self.inlay_outer.vertices[self.thickness_points_id])
+        self.stitched_inlay, self.fixed_stitched_inlay = stitched_inlay, self.stitched_inlay
+        self.inlay_outer, self.fixed_inlay_outer = inlay_outer, self.inlay_outer
         if self.configs["isSave"]:
             open3d.io.write_triangle_mesh(
                 os.path.join(
                     self.configs["save_path"],
                     f"15_stitch_fixed_inlay_outer_{self.tid}.ply",
                 ),
-                self.tri2o3d(self.inlay_outer),
+                self.tri2o3d(self.fixed_inlay_outer),
             )
             open3d.io.write_triangle_mesh(
                 os.path.join(
                     self.configs["save_path"],
                     f"14_stitch_fixed_inlay_{self.tid}.ply",
                 ),
-                self.stitched_inlay,
+                self.fixed_stitched_inlay,
             )
 
     def get_inlay_outer(self) -> open3d.geometry.TriangleMesh:

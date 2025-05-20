@@ -19,8 +19,8 @@ def run(data):
     return {
         "stitched_inlay": IG.o3d2tri(IG.stitched_inlay),
         "inlay_outer": IG.o3d2tri(IG.inlay_outer),
-        "fixed_stitched_inlay": IG.fixed_stitched_inlay,
-        "fixed_inlay_outer": IG.fixed_inlay_outer,
+        "fixed_stitched_inlay": IG.o3d2tri(IG.fixed_stitched_inlay),
+        "fixed_inlay_outer": IG.o3d2tri(IG.fixed_inlay_outer),
         "thickness_points": IG.thickness_points_id,
     }
 
@@ -67,3 +67,44 @@ def handler(event, context):
         }
         traceback.print_exc()
         return res
+
+if __name__ == "__main__":
+    import json
+    import yaml
+
+    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/gpu_7377fc8c-4c35-4d45-969d-50f521dd6493/output.json") as f:
+        data = json.load(f)["cpu_process_info"]
+    
+    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/post_0b2bcfb3-208b-48d5-8f64-3dc2ed484145/output.json") as f:
+        data_ = json.load(f)
+
+    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/occ_0c6194f4-adc1-4772-82e7-afeebc83533d/input.json") as f:
+        data__ = json.load(f)
+        
+    for key in data_:
+        data[key] = data_[key]
+    
+    for key in data__:
+        data[key] = data__[key] 
+    # with open("test_data/ali/post_error/1924366727035092993/post_1924367556224086016/postCrownInput.json") as f:
+    #     data = json.load(f)
+    
+    # mesh = trimesh.load('test_data/e6a9294b-7324-46a7-87b9-b37196907864/0_lib_tooth_16.ply')
+    # data['stdcrown'] = write_mesh_bytes(mesh)
+    
+    for i in range(1):
+        print(i)
+        # 读取 YAML 文件
+        with open("configs.yaml", "r") as file:
+            config = yaml.safe_load(file)
+
+        # 修改参数
+        # config["savePath"] = f"./result/test{i + 110}"
+        config["isSave"] = True
+        config["savePath"] = "./result/test_2302911b"
+
+        # 保存修改后的 YAML 文件
+        with open("configs.yaml", "w") as file:
+            yaml.dump(config, file, default_flow_style=False, sort_keys=False)
+
+        handler(data, None)

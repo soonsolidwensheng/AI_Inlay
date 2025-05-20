@@ -168,6 +168,15 @@ def find_changed_faces(mesh1, mesh2, threshold=0.05):
     vertices2 = np.array(mesh2.vertices)
     faces2 = np.array(mesh2.faces)
 
+    for i in range(10):
+        if len(faces1) != len(faces2):
+            idx = min([x for x in range(len(faces2)) if (faces1[x] != faces2[x]).all()])
+            if len(faces1) > len(faces2):
+                faces1 = np.vstack((faces1[:idx], faces1[idx + 1 :]))
+            else:
+                faces2 = np.vstack((faces2[:idx], faces2[idx + 1 :]))
+        else:
+            break
     # 确保两个网格的面数量相同
     assert faces1.shape == faces2.shape, "两个网格的面数量不一致"
 
