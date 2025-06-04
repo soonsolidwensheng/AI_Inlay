@@ -6,7 +6,9 @@ import numpy as np
 import open3d
 import trimesh
 import networkx as nx
-
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
+from scipy.spatial import cKDTree
 # import pypruners
 
 
@@ -231,3 +233,146 @@ def get_distance(mesh, points_id, cutoff):
     paths = nx.multi_source_dijkstra_path(G, points_id, cutoff)
     # 返回所有在cutoff距离范围内的点的索引
     return list(paths.keys())
+
+def angle_between_vectors(a, b, ignore=-1):
+    """
+    计算两个向量之间的夹角（单位：弧度）
+    """
+    if ignore != -1:
+        a[ignore] = b[ignore]
+    dot_product = np.dot(a, b)
+    magnitude_a = np.linalg.norm(a)
+    magnitude_b = np.linalg.norm(b)
+    cos_theta = dot_product / (magnitude_a * magnitude_b)
+    angle_rad = np.arccos(cos_theta)
+    return angle_rad
+
+def angle_between_vectors_batch(a, b, ignore=-1):
+    """
+    计算两组向量之间的夹角（单位：弧度）
+    
+    参数:
+    a -- 第一组向量，形状为 (n, 3)
+    b -- 第二组向量，形状为 (n, 3)
+    ignore -- 忽略的维度，-1 表示不忽略任何维度
+    
+    返回:
+    角度数组，形状为 (n,)
+    """
+    if ignore != -1:
+        a = a.copy()  # 避免修改原始数组
+        b = b.copy()
+        a[:, ignore] = b[:, ignore]
+    
+    dot_product = np.sum(a * b, axis=1)
+    magnitude_a = np.linalg.norm(a, axis=1)
+    magnitude_b = np.linalg.norm(b, axis=1)
+    cos_theta = dot_product / (magnitude_a * magnitude_b)
+    angle_rad = np.arccos(np.clip(cos_theta, -1.0, 1.0))  # 避免数值计算误差导致超出范围
+    return angle_rad
+
+
+class MeshCutter:
+    def __init__(self, v, f):
+        
+        self.vertices = np.array(v)
+        self.faces = np.array(f)
+        self.vertex_tree = cKDTree(self.vertices)
+        
+        # 构建顶点邻接矩阵
+        self.adjacency_matrix = self._build_adjacency_matrix()
+        
+    def _build_adjacency_matrix(self):
+        """构建顶点邻接矩阵"""
+        n_vertices = len(self.vertices)
+        # 创建稀疏矩阵
+        rows = []
+        cols = []
+        data = []
+        
+        # 遍历所有面
+        for face in self.faces:
+            # 添加面的三条边
+            for i in range(3):
+                v1, v2 = face[i], face[(i+1)%3]
+                # 计算边的长度
+                edge_length = np.linalg.norm(self.vertices[v1] - self.vertices[v2])
+                # 添加双向边
+                rows.extend([v1, v2])
+                cols.extend([v2, v1])
+                data.extend([edge_length, edge_length])
+        
+        # 创建稀疏矩阵
+        return csr_matrix((data, (rows, cols)), shape=(n_vertices, n_vertices))
+    
+    def _find_nearest_vertex(self, point):
+        """找到网格上距离给定点最近的顶点"""
+        distance, vertex_idx = self.vertex_tree.query(point)
+        return vertex_idx
+    
+    def _compute_geodesic_path(self, start_idx, end_idx):
+        """计算两点之间的测地线路径"""
+        # 使用Dijkstra算法计算最短路径
+        distances, predecessors = dijkstra(
+            self.adjacency_matrix, 
+            directed=False, 
+            indices=start_idx, 
+            return_predecessors=True
+        )
+        
+        # 重建路径
+        path = []
+        current = end_idx
+        while current != start_idx:
+            path.append(current)
+            current = predecessors[current]
+        path.append(start_idx)
+        return path[::-1]  # 反转路径使其从起点到终点
+    
+    def cut_mesh(self, contour_points):
+        """
+        根据轮廓点切割网格
+        :param contour_points: 轮廓点列表，每个点是一个3D坐标
+        :return: 切割后的网格
+        """
+        # 找到轮廓点对应的最近顶点
+        contour_vertices = [self._find_nearest_vertex(point) for point in contour_points]
+        
+        # 计算测地线路径
+        paths = []
+        for i in range(len(contour_vertices)):
+            start_idx = contour_vertices[i]
+            end_idx = contour_vertices[(i+1)%len(contour_vertices)]
+            path = self._compute_geodesic_path(start_idx, end_idx)
+            paths.extend(path)
+        
+        # 创建切割后的网格
+        # 1. 标记要保留的面
+        faces_to_keep = []
+        for face in self.faces:
+            # 检查面的所有顶点是否在切割路径上
+            if not any(vertex in paths for vertex in face):
+                faces_to_keep.append(face)
+        
+        # 2. 创建新的网格
+        if faces_to_keep:
+            new_mesh = trimesh.Trimesh(
+                vertices=self.vertices,
+                faces=faces_to_keep
+            )
+            return new_mesh
+        else:
+            return None
+
+def find_boundaries(mesh):
+    if type(mesh) is trimesh.Trimesh:
+        mesh_o3d = mesh.as_open3d
+    else:
+        mesh_o3d = mesh
+    a = mesh_o3d.get_non_manifold_edges(allow_boundary_edges=True)
+    b = mesh_o3d.get_non_manifold_edges(allow_boundary_edges=False)
+    a = np.unique(np.asarray(a).flatten())
+    b = np.unique(np.asarray(b).flatten())
+    out = b[~np.isin(b, a)]
+
+    return np.asarray(mesh.vertices)[out], out

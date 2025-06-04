@@ -83,20 +83,23 @@ if __name__ == "__main__":
     import json
     import yaml
 
-    with open("test_data/e6a9294b-7324-46a7-87b9-b37196907864/gpu_5fe56b5f-e6fb-4cdd-88fd-e96048128d9c/output.json") as f:
+    with open("test_data/studio/AAAD-KSLK/output.json") as f:
         data = json.load(f)["cpu_process_info"]
     
-    with open("test_data/e6a9294b-7324-46a7-87b9-b37196907864/post_57c5d7a8-2143-4067-b40b-3f3a6f983330/input.json") as f:
+    with open("test_data/studio/AAAD-KSLK/prep_q.json") as f:
         data_ = json.load(f)
 
     for key in data_:
         data[key] = data_[key]
         
-    # with open("test_data/ali/post_error/1924366727035092993/post_1924367556224086016/postCrownInput.json") as f:
+    # with open("test_data/pc_test/output.json") as f:
     #     data = json.load(f)
     
-    # mesh = trimesh.load('test_data/e6a9294b-7324-46a7-87b9-b37196907864/0_lib_tooth_16.ply')
-    # data['stdcrown'] = write_mesh_bytes(mesh)
+    # data["cpu_process_info"]["prep_q"] = data["mesh_prep"]["S"]
+    # data = data["cpu_process_info"]
+    data["prep_q"] = data["mesh_prep"]["S"]
+    mesh = trimesh.load('result/sdudio_good_case/AAAD-KSLK/2_registreation_36.stl')
+    data['stdcrown'] = write_mesh_bytes(mesh)
     
     for i in range(1):
         print(i)
@@ -107,10 +110,82 @@ if __name__ == "__main__":
         # 修改参数
         # config["savePath"] = f"./result/test{i + 110}"
         config["isSave"] = True
-        config["savePath"] = "./result/test_e6a9294b"
+        config["savePath"] = "./result/test_KSLK"
 
         # 保存修改后的 YAML 文件
         with open("configs.yaml", "w") as file:
             yaml.dump(config, file, default_flow_style=False, sort_keys=False)
 
         handler(data, None)
+        
+    # import os
+    # import open3d as o3d
+    # import numpy as np
+    # from utils import angle_between_vectors
+    # from icp_w import ipc_exec
+    # from stdcrown import run as std_run
+    # import time
+    
+    # pass_list = []
+    # cases = os.listdir("test_data/studio")
+    # cases_bad = ["AAAD-MAXG", "AAAD-MAN4", "AAAD-MAIX", "AAAD-MADS", "AAAD-KSUT", "AAAD-KSGF"]
+    # cases = [x for x in cases if x not in cases_bad]
+    # for files in cases:
+    #     if files in pass_list:
+    #         continue
+    #     files = "AAAD-KSLK"
+    #     print(files)
+    #     with open(f"test_data/studio/{files}/output.json") as f:
+    #         data = json.load(f)["cpu_process_info"]
+    #     data["prep_q"] = write_mesh_bytes(trimesh.load(f"test_data/studio/{files}/prep_q.stl"))
+    #     pcd = o3d.io.read_point_cloud(f"test_data/studio/{files}/inlayonlay_complete.pcd")
+    #     s1 = time.time()
+    #     pcd.estimate_normals(search_param = o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=60))
+    #     pcd.orient_normals_consistent_tangent_plane(100)
+    #     pcd_tri = trimesh.PointCloud(pcd.points)
+    #     centroid = pcd_tri.centroid
+    #     if angle_between_vectors(np.asarray(pcd.normals)[0], pcd_tri.vertices[0] - centroid) > np.pi / 2:
+    #         pcd.normals = o3d.utility.Vector3dVector(np.asarray(pcd.normals) * -1)
+        
+    #     mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd, o3d.utility.DoubleVector([0.3]))
+    #     s2 = time.time()
+    #     print("pcd2mesh", s2 - s1)
+    #     # mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=8, scale=1.5, linear_fit=False,)[0]
+        
+    #     # partial = trimesh.load(f"test_data/studio/{files}/mesh_partial.stl")
+    #     # prod = trimesh.proximity.ProximityQuery(partial)
+    #     # _, dis, _ = prod.on_surface(np.asarray(mesh.vertices))
+    #     # idx = np.where(dis < 0.05)[0]
+    #     # mesh.remove_vertices_by_index(idx)
+         
+    #     mesh = trimesh.Trimesh(mesh.vertices, mesh.triangles)
+        
+    #     # mesh = mesh.split(only_watertight=False)
+    #     # mesh = mesh[np.argmax(np.array([x.vertices.shape[0] for x in mesh]))]
+    #     std_mesh = std_run({"beiya_id": data.get("beiya_id")})
+    #     s3 = time.time()
+    #     std_mesh_copy = std_mesh.copy()
+    #     std_mesh_copy = std_mesh_copy.simplify_quadric_decimation(face_count=10000)
+    #     mesh = mesh.simplify_quadric_decimation(face_count=6000)
+    #     # mesh.export(f"./result/sdudio/{files}/mesh_complete.stl")
+    #     mat = ipc_exec(std_mesh_copy, mesh, 30)
+    #     std_mesh = std_mesh.apply_transform(mat)
+    #     print("ipc_exec", time.time() - s3)
+    #     data['stdcrown'] = write_mesh_bytes(std_mesh)
+        
+    #     for i in range(1):
+    #         # 读取 YAML 文件
+    #         with open("configs.yaml", "r") as file:
+    #             config = yaml.safe_load(file)
+
+    #         # 修改参数
+    #         # config["savePath"] = f"./result/test{i + 110}"
+    #         config["isSave"] = True
+    #         config["savePath"] = f"./result/sdudio/{files}"
+
+    #         # 保存修改后的 YAML 文件
+    #         with open("configs.yaml", "w") as file:
+    #             yaml.dump(config, file, default_flow_style=False, sort_keys=False)
+
+    #         handler(data, None)
+    #     break

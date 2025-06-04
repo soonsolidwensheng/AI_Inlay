@@ -168,41 +168,7 @@ class InlayGeneration:
         inlay_adaptation = InlayAdaptation()
         inlay_adaptation.setConfig(self.configs)
         self.inlay_outer = self.tri2o3d(self.inlay_outer)
-        # inlay_outer_vertex_normals = self.inlay_outer.vertex_normals
 
-        # # occlusal adaptation =======================================
-        if self.configs["adjust_crown"]:
-            self.inlay_outer = inlay_adaptation.calcuCrash(
-                self.inlay_outer, self.anta_scan
-            )  # occlusal
-        print("8. occlusal adaptation time: ", time.time() - s)
-        if self.configs["isSave"]:
-            open3d.io.write_triangle_mesh(
-                os.path.join(
-                    self.configs["save_path"], f"10_occlusal_inlay_outer_{self.tid}.ply"
-                ),
-                self.inlay_outer,
-            )
-        # proximal adaptation =======================================
-        s = time.time()
-        if self.configs["adjust_crown"]:
-            for adjacent_tooth in self.adjacent_teeth:
-                t = time.time()
-                prep_scan_without_one_adj = self.remove_overlaps(
-                    self.prep_scan, adjacent_tooth
-                )
-                print(f"remove_overlaps took {time.time() - t}s")
-                self.inlay_outer = inlay_adaptation.calcuCrash(
-                    self.inlay_outer, prep_scan_without_one_adj
-                )  # proximal
-        print("9. proximal adaptation time: ", time.time() - s)
-        if self.configs["isSave"]:
-            open3d.io.write_triangle_mesh(
-                os.path.join(
-                    self.configs["save_path"], f"11_proximal_inlay_outer_{self.tid}.ply"
-                ),
-                self.inlay_outer,
-            )
 
         # fill gap ==================================================
         s = time.time()

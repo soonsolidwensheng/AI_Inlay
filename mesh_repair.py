@@ -188,6 +188,9 @@ def run_single(data, only_move=False):
     if not isinstance(mesh, trimesh.Trimesh):
         mesh = trimesh.Trimesh(np.asarray(mesh.vertices), np.asarray(mesh.triangles))
     if only_move:
+        mesh = mesh.as_open3d
+        mesh.remove_unreferenced_vertices()
+        mesh.remove_duplicated_vertices()
         v, f = mesh.vertices, mesh.faces
     else:
         if not mesh.is_watertight:

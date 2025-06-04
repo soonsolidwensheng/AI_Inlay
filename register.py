@@ -11,7 +11,7 @@ import trimesh
 import trimesh.proximity
 from scipy.spatial import KDTree
 
-from slice_mesh import slice_mesh
+from slice_mesh import slice_mesh, slice_mesh2
 from inlaylast import inlayAdjust
 from utils import read_mesh
 
@@ -270,20 +270,25 @@ class MeshRegistration:
         prox = trimesh.proximity.ProximityQuery(outer)
         signed_dis = prox.signed_distance(np.array(mesh.vertices))
         if max(signed_dis) > -0.5:
+            bounds = bound_pc.get_axis_aligned_bounding_box()
+            nor_factor = copy.deepcopy(np.asarray(bound_pc.points)[:, 1])
+            nor_factor -= bounds.min_bound[1]
+            nor_factor /= bounds.max_bound[1] - bounds.min_bound[1]
+            nor_factor = nor_factor.reshape(-1, 1).repeat(3, axis=1)
             normals = np.array(norms)
             normals = normals / np.linalg.norm(normals)
             
-            normals_ = np.mean(np.array(bound_pts)) - np.array(bound_pts)
+            normals_ = np.mean(np.array(bound_pts), axis=0) - np.array(bound_pts)
             normals_ = normals_ / np.linalg.norm(normals_)
             
-            normals = normals  + normals_
+            normals = normals * (1- nor_factor) + normals_ * nor_factor
             normals = normals / np.linalg.norm(normals)
             
             bound_pc.normals = o3d.utility.Vector3dVector(normals)
             
             idx = get_distance(self.o3d2tri(mesh), np.asarray(
                         mesh.get_non_manifold_edges(allow_boundary_edges=False)
-                    ).flatten().tolist(), 2.5)
+                    ).flatten().tolist(), 2)
             mesh.remove_vertices_by_index(idx)
             
             mesh = trimesh.Trimesh(mesh.vertices, mesh.triangles)
@@ -295,7 +300,23 @@ class MeshRegistration:
             pcd_q = o3d.geometry.PointCloud(mesh.vertices)
             pcd_q.normals = mesh.vertex_normals
             
-            pcd_q += bound_pc
+            # n = max(len(pcd_q.points) // len(bound_pc.points), 1)
+            for _ in range(5):
+                pcd_q += bound_pc
+            
+            if self.isSave:
+                o3d.io.write_point_cloud(
+                    os.path.join(self.save_path, f"7_pcd_q_{self.teeth_num}.ply"),
+                    pcd_q,
+                )
+            
+            poisson_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                pcd_q,
+                depth=7,
+                scale=1.5,
+                linear_fit=False,
+                n_threads=multiprocessing.cpu_count(),
+            )[0]
         else:
             bound_pc.normals = o3d.utility.Vector3dVector(np.array(norms))
             pcd_q = o3d.geometry.PointCloud(mesh.vertices)
@@ -306,14 +327,20 @@ class MeshRegistration:
 
             pcd_q += bound_pc  # but keep all the boundary points
             pcd_q = pcd_q.remove_duplicated_points()
+            
+            if self.isSave:
+                o3d.io.write_point_cloud(
+                    os.path.join(self.save_path, f"7_pcd_q_{self.teeth_num}.ply"),
+                    pcd_q,
+                )
 
-        poisson_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            pcd_q,
-            depth=7,
-            scale=1.5,
-            linear_fit=False,
-            n_threads=multiprocessing.cpu_count(),
-        )[0]
+            poisson_mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                pcd_q,
+                depth=7,
+                scale=1.5,
+                linear_fit=False,
+                n_threads=multiprocessing.cpu_count(),
+            )[0]
         poisson_mesh.compute_vertex_normals()
         
         return poisson_mesh
@@ -450,9 +477,8 @@ class MeshRegistration:
 
         if len(mesh_q.vertex_normals) == 0:
             raise ValueError("Mesh has no vertex normals")
-        if len(mesh_q.vertices) > 10000:
-            mesh_q = mesh_q.simplify_quadratic_decimation(face_count=10000)
-
+        # if len(mesh_q.faces) > 10000:
+        #     mesh_q = mesh_q.simplify_quadric_decimation(face_count=len(mesh_q.faces) // 2)
         try:
             outlines = mesh_q.outline().referenced_vertices
         except Exception as e:
@@ -824,15 +850,11 @@ class MeshRegistration:
                     elif d_ < d:
                         d = d_
                         p0 = p_  # p0 is the inner margin point for the current outer margin point, p
-                # move p towards p0
-                vl = p0 - p
-                dl = np.linalg.norm(vl)
-                pl = p + vl * ((dl - 0.7 * self.stitching_width) / dl)
                 # move p0 (the point on the margin of inner) towards its normal direction for a little bit (0.3 * self.stitching_width)
                 [k, idx, _] = sub_pc_tree.search_knn_vector_3d(p0, 5)
                 p0_norm = np.sum(np.asarray(sub_pc.normals)[idx], axis=0)
                 p0_norm /= np.linalg.norm(p0_norm)
-                pl += 0.3 * self.stitching_width * p0_norm
+                pl = p0 + self.stitching_width * p0_norm
                 # save the ids and dst positions
                 index.append(i)
                 points.append([p, pl])
@@ -967,12 +989,14 @@ class MeshRegistration:
         tps_mesh_ = self.doTPS(
             tps_mesh, nextPcd, index, points, self.outer_pre_lift_dis
         )  # lift the outer for 1 mm
-
+        if self.isSave:
+            tps_mesh_.export(
+                os.path.join(self.save_path, f"8.1_tps_submesh_{self.teeth_num}.stl")
+            )
         mesh = self.subMeshBoundaryTps(
             dstboundary, self.tri2o3d(tps_mesh_)
         )  # strech the outer to meet Q margin
-        mesh = self.boundarySmooth(self.tri2o3d(mesh))
-        return self.o3d2tri(mesh)
+        return mesh
 
     def doLastSubTps(self, dstboundary, sub_mesh):
         pcd_bound = o3d.geometry.PointCloud()
@@ -1183,12 +1207,7 @@ class MeshRegistration:
             mesh_q.remove_degenerate_triangles()
             mesh_q.remove_unreferenced_vertices()
             pcd_b_q, _ = self.calcuBsubQ(mesh_target, mesh_q)  # B-Q
-            mesh = self.doRegist(pcd_source, pcd_b_q, mesh, self.registAlph).copy()
-        # from test_ransac import ransac_point_cloud_registration
-        # tr, _ = ransac_point_cloud_registration(mesh.vertices, np.asarray(pcd_b_q.points))
-        # mesh.apply_transform(tr)
         print("1. register time: ", time.time() - t1)
-        # mesh = trimesh.load('0_lib_tooth_46_transformed.ply')
 
         if self.isSave:
             o3d.io.write_triangle_mesh(
@@ -1216,8 +1235,9 @@ class MeshRegistration:
 
         # Boundary TPS=================================================================
         t1 = time.time()
-        boundarySet, _ = self.getBoundaryPoints(mesh_q)
+        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         has_boundary_mesh = self.doBoundaryTps(mesh, boundarySet)
+        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         print("3. doBoundaryTps time: ", time.time() - t1)
         if self.isSave:
             has_boundary_mesh.export(
@@ -1227,66 +1247,10 @@ class MeshRegistration:
                     )
                 )
             )
-        # first occlusion =================================================================
-        t1 = time.time()
-        if self.adjust_crown:
-            q_pro = trimesh.proximity.ProximityQuery(has_boundary_mesh)
-            dis, _ = q_pro.vertex(np.asarray(anta_scan.vertices))
-            anta_scan_points = np.asarray(anta_scan.vertices)[np.where(dis < 10)[0]]
-            sign_dis, _ = compute_signed_distance(has_boundary_mesh, anta_scan_points)
-            if max(sign_dis) > 0 and max(sign_dis) < 0.5:
-                has_boundary_mesh.apply_translation([0, -max(sign_dis), 0])
-                print("3.1. first occlusion time: ", time.time() - t1)
-                if self.isSave:
-                    has_boundary_mesh.export(
-                        (
-                            os.path.join(
-                                self.save_path, f"4.2_first_occlusion_{self.teeth_num}.stl"
-                            )
-                        )
-                    )
-                # Boundary TPS=================================================================
-                t1 = time.time()
-                has_boundary_mesh = self.doBoundaryTps(has_boundary_mesh, boundarySet)
-                print("3.2 doBoundaryTps2 time: ", time.time() - t1)
-                if self.isSave:
-                    has_boundary_mesh.export(
-                        (
-                            os.path.join(
-                                self.save_path, f"4.3_boundary_TPSed2_{self.teeth_num}.stl"
-                            )
-                        )
-                    )
-            # thickness=================================================================
-            t1 = time.time()
-            if self.adjust_crown:
-                has_boundary_mesh = self.ensure_thickness(
-                    has_boundary_mesh,
-                    self.inner_dilation,
-                    thickness=self.thickness,
-                    boundary_protect_range_offset=self.boundary_protect_range_offset,
-                    lib_tooth_config=self.lib_tooth_configs,
-                )
-                if self.isSave:
-                    has_boundary_mesh.export(
-                        os.path.join(self.save_path, f"5_inflated_outer_{self.teeth_num}.stl")
-                    )
-            print("4. thickness time: ", time.time() - t1)
-
         # split mesh with boundary=====================================================
         t1 = time.time()
-        # build poisson_mesh
-        # poisson_mesh = self.poisson_reconstruct(mesh_q)
-        poisson_mesh = self.poisson_reconstruct(self.inner_dilation.as_open3d, has_boundary_mesh)
-        print("5. poisson reconstruction time: ", time.time() - t1)
-        if self.isSave:
-            o3d.io.write_triangle_mesh(
-                os.path.join(self.save_path, f"7_poisson_mesh_{self.teeth_num}.stl"),
-                poisson_mesh,
-            )
-        t1 = time.time()
-        # poisson_mesh = read_mesh(os.path.join(self.save_path, "poisson_mesh.stl"))
-        sub_mesh = slice_mesh(has_boundary_mesh.as_open3d, poisson_mesh)
+        sub_mesh = slice_mesh2(has_boundary_mesh, boundarySet)
+        sub_mesh = self.boundarySmooth(self.tri2o3d(sub_mesh))
         print("6. slice_mesh time: ", time.time() - t1)
         if self.isSave:
             sub_mesh.compute_vertex_normals()
