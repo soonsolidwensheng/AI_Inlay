@@ -72,13 +72,13 @@ if __name__ == "__main__":
     import json
     import yaml
 
-    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/gpu_7377fc8c-4c35-4d45-969d-50f521dd6493/output.json") as f:
+    with open("test_data/5faeabd9-e224-4fa8-9623-78305b27f01c/gpu_df296758-59e0-46f4-8cfd-9e3930ca28e8/output.json") as f:
         data = json.load(f)["cpu_process_info"]
     
-    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/post_0b2bcfb3-208b-48d5-8f64-3dc2ed484145/output.json") as f:
+    with open("test_data/5faeabd9-e224-4fa8-9623-78305b27f01c/post_18729df0-a724-4e6e-aa31-a07d089d2727/output.json") as f:
         data_ = json.load(f)
 
-    with open("test_data/2302911b-ad65-4681-9b1f-085ac15590ab/occ_0c6194f4-adc1-4772-82e7-afeebc83533d/input.json") as f:
+    with open("test_data/5faeabd9-e224-4fa8-9623-78305b27f01c/occlu_951d9ebe-448b-46cb-9c05-c129fa200466/input.json") as f:
         data__ = json.load(f)
         
     for key in data_:
@@ -101,7 +101,7 @@ if __name__ == "__main__":
         # 修改参数
         # config["savePath"] = f"./result/test{i + 110}"
         config["isSave"] = True
-        config["savePath"] = "./result/test_2302911b"
+        config["savePath"] = "./result/test_5faeabd9"
 
         # 保存修改后的 YAML 文件
         with open("configs.yaml", "w") as file:

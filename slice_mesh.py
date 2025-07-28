@@ -122,7 +122,7 @@ def slice_mesh2(mesh, points):
     result_mesh = cutter.cut_mesh(nearest_points)
     mesh_list = result_mesh.split(only_watertight=False)
     result_mesh = mesh_list[np.argmax([np.min(x.vertices[:, 1]) for x in mesh_list])]
-    return result_mesh
+    return result_mesh, nearest_points
 
 
 if __name__ == "__main__":

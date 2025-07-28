@@ -10,10 +10,11 @@ try:
 except:
     debug_view_exist = False
     
+import os
 import trimesh
+
 import numpy as np
 g_boundary_kd = None
-
 
 def blender_mesh_to_trimesh(blender_mesh):
 
@@ -164,11 +165,11 @@ def scaleEdge(inlay_bm,inlay_bvh, bm):
             
     for v in final_move_list:
         result = inlay_bvh.ray_cast( v.co, -v.normal )
-        # print( result )
+        #print( result )
         if result[0] != None:
             
             offset =  result[3] 
-            # print('offset', offset )
+            #print('offset', offset )
             if offset > 0:
                 bpy.ops.mesh.select_all(action='DESELECT')
                 v.select_set(True)
@@ -228,7 +229,7 @@ def calcVertMoveDist(inlay_bm,inlay_bvh, bm):
                     bpy.ops.mesh.select_all(action='DESELECT')
                     v.select_set(True)
                     smooth_verts.append( v.index )
-                    bpy.ops.transform.translate(value=(0.0, 0.0, offset), orient_type='NORMAL', orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=1.5, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
+                    bpy.ops.transform.translate(value=(0.0, 0.0, offset),  orient_type='NORMAL', orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=1.5, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
 
 
 
@@ -297,8 +298,8 @@ def findNearFaceByPoints(points, bm, inlayObj, p_size=1.0 ):
                     bpy.ops.transform.translate(value=(0.0, 0.0, dist), orient_type='NORMAL', orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=p_size, use_proportional_connected=False, use_proportional_projected=False, release_confirm=True)
                     f.select_set(False)
             if count > 0:
-                pass
                 # print( 'count', count )
+                pass
 
    
                 
@@ -368,7 +369,7 @@ class InlayAdjust:
     def grooveSphereSort(self, bm ):
         kd = mathutils.kdtree.KDTree(len( self.grooveFaces ))
         for f in self.grooveFaces:
-            # print(f)
+            #print(f)
             face_center = bm.faces[f].calc_center_median()
             kd.insert(face_center, f )
         kd.balance()
@@ -613,6 +614,8 @@ class InlayAdjust:
                 
 
         # print( group_faces )
+        
+    
         
     def check(self, thickness = 0.8):
         inlayObj = self.inlayObj
@@ -862,6 +865,12 @@ class InlayAdjust:
         move_max_thickness = 0.0
         max_proportional_size = 2.0
         
+        
+        
+    
+            
+        
+        
         for i, faces in enumerate( group_faces ):
             v = 0.0
             for f in faces:
@@ -1008,18 +1017,31 @@ def inlayAdjust_file(crown_filepath, inlay_filepath):
     inlay_verts, inlay_faces = loadStl( inlay_filepath )
     #return inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces )
     
+def firstFindCrownObj():
+    for i in bpy.data.objects:
+        if i.name.find('boundary_TPSed') >= 0:
+            return i
+
+def firstFindInlayObj():
+    for i in bpy.data.objects:
+        if i.name.find('thickness_shell') >= 0:
+            return i    
+            
+
+    
 def inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces, oc_verts = None ):   
     inlayObj, crownObj = to_objects( crown_verts, crown_faces, inlay_verts, inlay_faces )
  
+    testFirst(crownObj, inlayObj)
 
 
-    inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
+    #~ inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
 
     
-    if oc_verts != None:
-        inlayAdjust_obj.set_oc_verts(oc_verts)
-    inlayAdjust_obj.check()
-    inlayAdjust_obj.check()
+    #~ if oc_verts != None:
+        #~ inlayAdjust_obj.set_oc_verts(oc_verts)
+    #~ inlayAdjust_obj.check()
+    #~ inlayAdjust_obj.check()
     #~ inlayAdjust_fn( inlayObj, crownObj, p_size=1.0  )    
     #~ inlayAdjust_fn( inlayObj, crownObj, p_size=0.2  )    
 
@@ -1031,6 +1053,274 @@ def inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces, oc_verts = N
     
     return out_verts, out_faces
     
+    
+def first(crownObj, inlayObj):
+    inlay_bm
+    inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+    
+def createObjectBVH(obj):
+    vertices = [ v.co for v in obj.data.vertices]
+    polygons = [ p.vertices for p in obj.data.polygons]
+    
+    bvh = mathutils.bvhtree.BVHTree.FromPolygons(vertices, polygons) 
+
+    return bvh
+    
+    
+def isNearBoundary( kd, origin):
+    co, index, dist = kd.find(origin)
+    if dist < 0.8:
+        return True
+    
+    return False
+    
+    
+def testFirst(crownObj, inlayObj):    
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.editmode_toggle()    
+    selectObj(crownObj)
+    
+    inlay_bm = bmesh.new()
+    inlay_bm.from_mesh(inlayObj.data)
+    
+    if bpy.context.mode != 'EDIT_MESH':
+        bpy.ops.object.editmode_toggle()
+    
+    crown_bm = bmesh.from_edit_mesh( crownObj.data)
+    
+    crown_bm.faces.ensure_lookup_table()
+    
+    #~ crown_bm = bmesh.new()
+    #~ crown_bm.from_mesh( crownObj.data )
+    
+    boundary_count = 0
+    #~ debug_view.close()
+    #~ debug_view.open()
+    
+    for i in inlay_bm.verts:
+        if i.is_boundary:
+            boundary_count += 1
+    
+    inlay_boundary_kd = mathutils.kdtree.KDTree(boundary_count)
+    for i in inlay_bm.verts:
+        if i.is_boundary:
+            inlay_boundary_kd.insert(i.co, i.index)
+    inlay_boundary_kd.balance()
+    
+    
+    bDebug = False
+    
+    for c in range(0, 80):
+        # print( c )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        #crown_bvh = createObjectBVH(crownObj)
+        crown_bvh = mathutils.bvhtree.BVHTree.FromBMesh(crown_bm)
+        move_faces = []
+        move_faces_dist = []
+        move_faces_dir = []
+        inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+        for f in crown_bm.faces:
+            origin =  f.calc_center_median()
+            direction = f.normal
+            loc, normal, idx, dist = inlay_bvh.ray_cast( origin, direction )
+            if loc != None and direction.dot(normal) > 0.6:
+
+                
+                bBoundary = isNearBoundary(inlay_boundary_kd, origin)
+                if not bBoundary and dist < 2:
+                    #~ f.select_set(True)
+                    ray_dir = mathutils.Vector((0,1,0))
+                    s_loc, s_nor, s_idx, s_dist = crown_bvh.ray_cast( origin + ray_dir*0.1, ray_dir )
+                    if s_loc == None:
+                  
+                        move_faces.append( f.index )
+                        move_faces_dist.append( dist )
+                        move_faces_dir.append( direction )
+                    
+
+        if bDebug:            
+                
+            for i in move_faces:
+                crown_bm.faces[i].select_set(True)
+                
+            return
+        if len(move_faces) == 0 :
+            break
+        #~ return
+                    #debug_view.drawPoint( n_loc )
+                    
+        mf_dist, mf, mf_dir = sort_arrays_based_on_first_desc( move_faces_dist, move_faces, move_faces_dir )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        for i, f in enumerate(mf):
+            #~ crown_bm.faces[f].select_set(True)
+            upDir = mathutils.Vector((0,1,0))
+            if crown_bm.faces[f].normal.dot( upDir ) > 0.5:
+                #~ bpy.ops.mesh.select_all(action='DESELECT')
+                crown_bm.faces[f].select_set(True)
+                
+            #center = crown_bm.faces[f].calc_center_median()
+                # print( '***', mf_dist[0] )
+                bpy.ops.transform.translate(value=(0,0.2,0), orient_type='GLOBAL',  orient_matrix_type='GLOBAL', constraint_axis=(True, True, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=2.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+
+                break
+                
+    #**********************************************
+    for c in range(0, 50):
+        # print( 'se:', c )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        #crown_bvh = createObjectBVH(crownObj)
+        crown_bvh = mathutils.bvhtree.BVHTree.FromBMesh(crown_bm)
+        move_faces = []
+        move_faces_dist = []
+        move_faces_dir = []
+        inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+        for f in crown_bm.faces:
+            origin =  f.calc_center_median()
+            direction = f.normal
+            loc, normal, idx, dist = inlay_bvh.ray_cast( origin, direction )
+            if loc != None:
+
+                
+                bBoundary = isNearBoundary(inlay_boundary_kd, origin)
+                if not bBoundary and dist < 2:
+                    #~ f.select_set(True)
+                    ray_dir =f.normal
+                    s_loc, s_nor, s_idx, s_dist = crown_bvh.ray_cast( origin + ray_dir*0.1, ray_dir )
+                    if s_loc == None:
+                  
+                        move_faces.append( f.index )
+                        move_faces_dist.append( dist )
+                        move_faces_dir.append( direction )
+                    
+
+        if bDebug:            
+                
+            for i in move_faces:
+                crown_bm.faces[i].select_set(True)
+                
+            return
+        if len(move_faces) == 0 :
+            break
+        #~ return
+                    #debug_view.drawPoint( n_loc )
+                    
+        mf_dist, mf, mf_dir = sort_arrays_based_on_first_desc( move_faces_dist, move_faces, move_faces_dir )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        for i, f in enumerate(mf):
+            #~ crown_bm.faces[f].select_set(True)
+                #~ bpy.ops.mesh.select_all(action='DESELECT')
+            crown_bm.faces[f].select_set(True)
+            
+            # print( '***', mf_dist[0] )
+            bpy.ops.transform.translate(value=(0,0.0,0.2), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=2.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+
+            break
+                    
+    #~ inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
+    #~ inlayAdjust_obj.check()
+    #~ inlayAdjust_obj.check()
+    
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.editmode_toggle()          
+def testFirst2(crownObj, inlayObj):
+    #crownObj = firstFindCrownObj()
+    #inlayObj = firstFindInlayObj()
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.editmode_toggle()    
+    selectObj(crownObj)
+    
+    inlay_bm = bmesh.new()
+    inlay_bm.from_mesh(inlayObj.data)
+    
+    if bpy.context.mode != 'EDIT_MESH':
+        bpy.ops.object.editmode_toggle()
+    
+    crown_bm = bmesh.from_edit_mesh( crownObj.data)
+    
+    crown_bm.faces.ensure_lookup_table()
+    
+    #~ crown_bm = bmesh.new()
+    #~ crown_bm.from_mesh( crownObj.data )
+    
+    boundary_count = 0
+    #~ debug_view.close()
+    #~ debug_view.open()
+    
+    for i in inlay_bm.verts:
+        if i.is_boundary:
+            boundary_count += 1
+    
+    inlay_boundary_kd = mathutils.kdtree.KDTree(boundary_count)
+    for i in inlay_bm.verts:
+        if i.is_boundary:
+            inlay_boundary_kd.insert(i.co, i.index)
+    inlay_boundary_kd.balance()
+    
+    
+    bDebug = False
+    
+    for c in range(0, 80):
+        # print( c )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        #crown_bvh = createObjectBVH(crownObj)
+        crown_bvh = mathutils.bvhtree.BVHTree.FromBMesh(crown_bm)
+        move_faces = []
+        move_faces_dist = []
+        move_faces_dir = []
+        inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+        for f in crown_bm.faces:
+            origin =  f.calc_center_median()
+            direction = f.normal
+            loc, normal, idx, dist = inlay_bvh.ray_cast( origin, direction )
+            if loc != None and direction.dot(normal) > 0.7:
+                
+                #~ f.select_set(True)
+                
+                bBoundary = isNearBoundary(inlay_boundary_kd, origin)
+                if not bBoundary and dist < 2:
+                    
+                    s_loc, s_nor, s_idx, s_dist = crown_bvh.ray_cast( origin + direction*0.1, direction )
+                    if s_loc == None:
+                  
+                        move_faces.append( f.index )
+                        move_faces_dist.append( dist )
+                        move_faces_dir.append( direction )
+                    
+                    
+        if bDebug:            
+                
+            for i in move_faces:
+                crown_bm.faces[i].select_set(True)
+                
+            return
+        if len(move_faces) == 0 :
+            break
+        #~ return
+                    #debug_view.drawPoint( n_loc )
+                    
+        mf_dist, mf, mf_dir = sort_arrays_based_on_first_desc( move_faces_dist, move_faces, move_faces_dir )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        for i, f in enumerate(mf):
+            crown_bm.faces[f].select_set(True)
+            upDir = mathutils.Vector((0,1,0))
+            if crown_bm.faces[f].normal.dot( upDir ) > 0.8:
+            
+            #center = crown_bm.faces[f].calc_center_median()
+                # print( '******', mf_dist[i] )
+            #print( '***', center )
+                bpy.ops.transform.translate(value=(0,0, mf_dist[i]), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=2.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+
+                break
+                
+    
+    #~ inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
+    #~ inlayAdjust_obj.check()
+    #~ inlayAdjust_obj.check()
+    
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.editmode_toggle()      
+    
+    
 def build_crown( verts_filename, faces_filename ):
     hFile = open( verts_filename, 'rt' )
     bLoop = True
@@ -1039,7 +1329,7 @@ def build_crown( verts_filename, faces_filename ):
         theLine = hFile.readline()
         if theLine == '':
             bLoop = False
-            break
+            break;
 
         values = theLine.split(' ')
         verts.append( ( float(values[0]),  float(values[1]),  float(values[2]) ) )
@@ -1114,8 +1404,128 @@ def is_slender_triangle(face, angle_threshold=5):
 def get_proportional(kd, center):
     co, index, dist = kd.find(center)
     return dist
-def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
+    
+    
+def sort_arrays_based_on_first(arr1, arr2, arr3):
+    indices = list(range(len(arr1)))
+    indices.sort(key=lambda i: arr1[i])
+    sorted_arr1 = [arr1[i] for i in indices]
+    sorted_arr2 = [arr2[i] for i in indices]
+    sorted_arr3 = [arr3[i] for i in indices]
+    return sorted_arr1, sorted_arr2, sorted_arr3    
+    
+    
+def sort_arrays_based_on_first_desc(arr1, arr2, arr3):
+    combined = list(zip(arr1, arr2, arr3))
+    combined_sorted = sorted(combined, key=lambda x: x[0], reverse=True)
+    sorted_arr1 = [item[0] for item in combined_sorted]
+    sorted_arr2 = [item[1] for item in combined_sorted]
+    sorted_arr3 = [item[2] for item in combined_sorted]
+    return sorted_arr1, sorted_arr2, sorted_arr3    
+    
+def loopFixSelfIntersection(inlay_bm, inlay_surface_array, boundary_kd, debug_cc):
+    
+    # print( '**************', 'loopFixSelfIntersection')
+
+    inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm) 
+    bLoop = True
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.mesh.print3d_check_intersect()
+    bpy.ops.mesh.print3d_select_report()
+    
+    
+    selectCount = 0
+    
+    for i in inlay_bm.faces:
+        if i.select:
+            selectCount += 1
+            
+    if selectCount == 0:
+        return True
+    # print( 'selectCount:', selectCount )
+    _need_move_faces = [] 
+    _need_center_faces = []        
+    _need_dist_faces = [] 
+
+    for i in inlay_bm.faces:
+        if i.select:
+            if i.index in inlay_surface_array:
+                f_center = i.calc_center_median()
+                _need_move_faces.append( i.index )
+                _need_center_faces.append( f_center )
+                _need_dist_faces.append( 0.1 )
+                
+                
+                
+                
+   
+    bpy.ops.mesh.select_all(action='DESELECT')
+
+
+    for f in  inlay_surface_array:
+        
+        direction = inlay_bm.faces[f].normal
+        origin = inlay_bm.faces[f].calc_center_median() + direction * 0.01
+        loc, nor, idx, dist = inlay_bvh.ray_cast(origin, direction)
+        if loc != None:
+            if not is_slender_triangle(inlay_bm.faces[f]):
+                # inlay_bm.faces[f].select_set(True)
+                _need_move_faces.append( f )
+                f_center = inlay_bm.faces[f].calc_center_median()
+                _need_center_faces.append( f_center )
+                _need_dist_faces.append( dist+0.05 )
+                
+    
+    
+    s_dist_faces, s_center_faces, s_move_faces = sort_arrays_based_on_first_desc(_need_dist_faces,  _need_center_faces, _need_move_faces )
+
+        
+    if debug_cc == 1:
+        for i,f_id in enumerate(s_move_faces):
+            inlay_bm.faces[f_id].select_set(True)
+        return True
+
+    
+                
+    # print( '_need_move_faces:', len(_need_move_faces) ) 
+    bpy.ops.mesh.select_all(action='DESELECT')
+    for i,f_id in enumerate(s_move_faces):
+        inlay_bm.faces[f_id].select_set(True)
+        f_center = inlay_bm.faces[f_id].calc_center_median()
+        if (_need_center_faces[i] - f_center).length < 0.1:
+            rrr = get_proportional( boundary_kd, f_center )
+            dddd = inlay_bm.faces[f_id].normal.dot( mathutils.Vector((0,1,0) ))
+            # print( dddd )
+            if dddd > 0.6:
+                bpy.ops.transform.translate(value=(0,0, s_dist_faces[i]), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=1.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+                
+        inlay_bm.faces[f_id].select_set(False)     
+        bpy.ops.mesh.select_all(action='DESELECT')
+        
+        
+    return False
+    
+        
+def findSurfaceObj():
+    for i in bpy.data.objects:
+        if i.name.find('final_inlay_outer' ) >= 0:
+            return i
+            
+def findInlayObj():
+    for i in bpy.data.objects:
+        if i.name.find('stitched_inlay' ) >= 0:
+            return i    
+            
+def findThicknessShell():
+    for i in bpy.data.objects:
+        if i.name.find('thickness_shell') >= 0:
+            return i        
+            
+bDebugSelfIntersection = True        
+
+def inlayPost22(surfaceObj, inlayObj, bSmooth=True, separate=True ):
     bpy.ops.preferences.addon_enable(module="object_print3d_utils")
+    exist_selfIntersection = True
 
     if bpy.context.mode == 'EDIT_MESH':
         bpy.ops.object.editmode_toggle()    
@@ -1193,9 +1603,13 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
         
      
     bLoop = True
+    testSelfIntersect = True
+    
     bpy.ops.mesh.select_all(action='DESELECT')
     bpy.ops.mesh.print3d_check_intersect()
     bpy.ops.mesh.print3d_select_report()
+
+        
     _need_move_faces = [] 
     _need_center_faces = []        
     _need_dist_faces = [] 
@@ -1204,55 +1618,244 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
         if i.select:
             if i.index in inlay_surface_array:
                 f_center = i.calc_center_median()
-                _need_move_faces.append( i.index )
-                _need_center_faces.append( f_center )
-                _need_dist_faces.append( 0.1 )
                 
+                b_co, b_idx, b_dist = boundary_kd.find(f_center)
+                
+                #print(b_co, b_idx, b_dist  )
+                if b_dist > 0.5:
+                    _need_move_faces.append( i.index )
+                    _need_center_faces.append( f_center )
+                    _need_dist_faces.append( 0.1 )
+            
    
     bpy.ops.mesh.select_all(action='DESELECT')
-
-
-    for f in  inlay_surface_array:
+    
+    for i in _need_move_faces:
+        inlay_bm.faces[i].select_set(True)
         
-        direction = inlay_bm.faces[f].normal
-        origin = inlay_bm.faces[f].calc_center_median() + direction * 0.01
-        loc, nor, idx, dist = inlay_bvh.ray_cast(origin, direction)
-        if loc != None and dist < 0.1:
-            if not is_slender_triangle(inlay_bm.faces[f]):
-                # inlay_bm.faces[f].select_set(True)
-                _need_move_faces.append( f )
-                f_center = inlay_bm.faces[f].calc_center_median()
-                _need_center_faces.append( f_center )
-                _need_dist_faces.append( dist+0.05 )
-                
-    # return
-    # points = []
 
-    for i in inlay_bm.verts:
-        if i.select:
-            points.append( i.co )
+def inlayPost(surfaceObj, inlayObj, shellObj=None, bSmooth=True, separate=True ):
+    bpy.ops.preferences.addon_enable(module="object_print3d_utils")
+    exist_selfIntersection = True
 
-    # for i,f_id in enumerate(_need_move_faces):
-        # inlay_bm.faces[f_id].select_set(True)
+    if bpy.context.mode == 'EDIT_MESH':
+        bpy.ops.object.editmode_toggle()    
+    bpy.ops.object.select_all(action='DESELECT')
+
+
+    selectObj(inlayObj)
+    surfaceObj.select_set(True)
 
     
-                
-    # print( '_need_move_faces:', len(_need_move_faces) ) 
-    bpy.ops.mesh.select_all(action='DESELECT')
-    for i,f_id in enumerate(_need_move_faces):
-        inlay_bm.faces[f_id].select_set(True)
-        f_center = inlay_bm.faces[f_id].calc_center_median()
-        if (_need_center_faces[i] - f_center).length < 0.1:
-            rrr = get_proportional( boundary_kd, f_center )
+    if bpy.context.mode != 'EDIT_MESH':
+        bpy.ops.object.editmode_toggle()
+        
 
-            bpy.ops.transform.translate(value=(0,0, _need_dist_faces[i]*0.5), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=1.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
-                
-        inlay_bm.faces[f_id].select_set(False)     
-        bpy.ops.mesh.select_all(action='DESELECT')
-    # for k in range(0, 1 ):
-    # return
+
+    surface_bm = bmesh.from_edit_mesh(surfaceObj.data)
+    surface_bm.faces.ensure_lookup_table()
+    inlay_bm = bmesh.from_edit_mesh(inlayObj.data)
+    inlay_bm.verts.ensure_lookup_table()
+    inlay_bm.faces.ensure_lookup_table()
     bpy.ops.mesh.select_all(action='DESELECT')
-    bpy.context.scene.print_3d.thickness_min = 0.8
+
+    surface_bvh = mathutils.bvhtree.BVHTree.FromBMesh(surface_bm)
+    
+    
+    s_o = surface_bvh.overlap(surface_bvh)
+    surface_exist_overlap = False
+    if( len(s_o) > 0 ):
+        surface_exist_overlap = True
+    
+    s_o_kd = None
+    if surface_exist_overlap:
+        s_o_kd = mathutils.kdtree.KDTree( len(s_o) )
+        for i,j in s_o:
+            center = surface_bm.faces[i].calc_center_median()
+            s_o_kd.insert( center , i )
+        s_o_kd.balance()
+    
+    inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+
+    inlay_surface_array = []
+    inlay_back_array = []
+    for f in surface_bm.faces:
+        f_center = f.calc_center_median()
+        loc,nor,idx,dist= inlay_bvh.find_nearest( f_center )
+        if dist < 0.5:
+            inlay_bm.faces[idx].select_set(True)
+            inlay_surface_array.append( idx )
+        
+    for f in inlay_bm.faces:
+        if not f.select:
+            inlay_back_array.append(f.index)
+        
+
+    fixed_co_verts = []
+    fixed_id_verts = []
+    _need_move_faces = [] 
+
+    for i in inlay_bm.verts:
+        fixed_co_verts.append( (i.co[0], i.co[1], i.co[2]) )
+        
+        #~ if not flexibility:
+        if i.select == False:
+            fixed_id_verts.append( i.index )
+            
+    
+                
+    #~ print('***', len(fixed_id_verts))
+    #~ return    
+    boundary_count = 0
+    for i in surface_bm.verts:
+        if i.is_boundary:
+            boundary_count += 1
+    boundary_kd = mathutils.kdtree.KDTree(boundary_count)
+    for v in surface_bm.verts:
+        if v.is_boundary:
+            boundary_kd.insert(v.co, v.index)
+    boundary_kd.balance()
+    bb_id_verts = []
+    for i in inlay_bm.verts:
+        loc, index, dist = boundary_kd.find( i.co )
+        
+        if loc != None and dist < 0.01:
+            bb_id_verts.append( i.index )
+            # fixed_co_verts.append( (i.co[0], i.co[1], i.co[2]) )
+            
+            fixed_id_verts.append( i.index )
+    #~ bpy.ops.mesh.select_all(action='DESELECT')
+  
+    #~ bpy.ops.mesh.select_mode(use_expand=True, type='VERT')        
+    #~ for i in fixed_id_verts:
+        #~ inlay_bm.verts[i].select_set(True)
+        
+     
+    bLoop = True
+    testSelfIntersect = False
+    count = 0
+    while( bLoop ):
+        bpy.ops.mesh.select_all(action='DESELECT')
+        bpy.ops.mesh.print3d_check_intersect()
+        bpy.ops.mesh.print3d_select_report()
+        
+        
+        if testSelfIntersect:
+            bLoop = False
+            break
+        
+        
+        
+        _need_move_faces = [] 
+        _need_center_faces = []        
+        _need_dist_faces = [] 
+
+        for i in inlay_bm.faces:
+            if i.select:
+                if i.index in inlay_surface_array:
+                    f_center = i.calc_center_median()
+                    
+                    bFilter = False
+                    if surface_exist_overlap:
+                        co,idx,dist = s_o_kd.find( f_center )
+                        # print( co, idx, dist )
+                        if dist < 0.2:
+                            bFilter = True
+                    
+                    if not bFilter:
+                        b_co, b_idx, b_dist = boundary_kd.find(f_center)
+                        
+                        #print(b_co, b_idx, b_dist  )
+                        #~ if b_dist > 0.5:
+                        _need_move_faces.append( i.index )
+                        _need_center_faces.append( f_center )
+                        _need_dist_faces.append( 0.1 )
+                        
+       
+        bpy.ops.mesh.select_all(action='DESELECT')
+        
+        if( len(_need_move_faces) == 0 ):
+            break
+        count += 1
+        
+        
+        for i,f_id in enumerate(_need_move_faces):
+            inlay_bm.faces[f_id].select_set(True)   
+            
+            bpy.ops.transform.translate(value=(0, 0, 0.1), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=0.5, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+
+            bpy.ops.mesh.select_all(action='DESELECT')
+            break
+            
+        if count >= 200:
+            break
+            
+    if testSelfIntersect:
+        return
+        
+    bbbb = False
+    if bbbb:
+    
+        global bDebugSelfIntersection
+        if bDebugSelfIntersection:
+            for i,f_id in enumerate(_need_move_faces):
+                inlay_bm.faces[f_id].select_set(True)   
+            return       
+        if len(_need_move_faces) == 0:
+            exist_selfIntersection = False
+            
+        for i in inlay_bm.verts:
+            if i.select:
+                points.append( i.co )
+                
+        #print( 'EXIST', exist_selfIntersection )
+                
+        if exist_selfIntersection:
+
+            for f in  inlay_surface_array:
+                
+                direction = inlay_bm.faces[f].normal
+                origin = inlay_bm.faces[f].calc_center_median() + direction * 0.01
+                loc, nor, idx, dist = inlay_bvh.ray_cast(origin, direction)
+                if loc != None:
+                    if not is_slender_triangle(inlay_bm.faces[f]):
+                        # inlay_bm.faces[f].select_set(True)
+                        _need_move_faces.append( f )
+                        f_center = inlay_bm.faces[f].calc_center_median()
+                        _need_center_faces.append( f_center )
+                        _need_dist_faces.append( dist+0.05 )
+                    
+
+        bpy.ops.mesh.select_all(action='DESELECT')
+        for i,f_id in enumerate(_need_move_faces):
+            inlay_bm.faces[f_id].select_set(True)
+            f_center = inlay_bm.faces[f_id].calc_center_median()
+            if (_need_center_faces[i] - f_center).length < 0.1:
+                rrr = get_proportional( boundary_kd, f_center )
+
+                bpy.ops.transform.translate(value=(0,0, _need_dist_faces[i]*0.5), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=1.0, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+                    
+            inlay_bm.faces[f_id].select_set(False)     
+            bpy.ops.mesh.select_all(action='DESELECT')
+        # for k in range(0, 1 ):
+        
+        for i in range(0,10):
+            bStop = loopFixSelfIntersection( inlay_bm, inlay_surface_array, boundary_kd, 0 )
+            
+            for j in fixed_id_verts:
+                inlay_bm.verts[j].co[0] = fixed_co_verts[j][0]
+                inlay_bm.verts[j].co[1] = fixed_co_verts[j][1]
+                inlay_bm.verts[j].co[2] = fixed_co_verts[j][2]        
+            
+            bmesh.update_edit_mesh(inlayObj.data)
+            if(bStop):
+                break
+    
+    
+    
+    
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.data.scenes["Scene"].print_3d.thickness_min = 0.8
     thick_ops = bpy.ops.mesh.print3d_check_thick()
     bpy.ops.mesh.print3d_select_report()  
     need_move_faces = []
@@ -1264,27 +1867,60 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
                 need_move_faces.append( i.index )
                 need_center_faces.append( f_center )
                 
+    
+                
     bpy.ops.mesh.select_all(action='DESELECT')
-
-    for j in range(0,10):
-        last_dist = 0.0
-        select_face = -1
-        for i, f_id in enumerate(need_move_faces):
-            f_center = inlay_bm.faces[f_id].calc_center_median()
-            if (need_center_faces[i] - f_center).length < 0.1:
-                face_center = inlay_bm.faces[f_id].calc_center_median()
-                loc, idx,dist = boundary_kd.find(face_center)
-                # print( loc, idx, dist )
-                if dist > last_dist and dist > 0.1:
-                    last_dist = dist 
-                    select_face = f_id
+    
+    for i, f_id in enumerate(need_move_faces):
+        inlay_bm.faces[f_id].select_set(True)
+    
+    
+    bCheckThick = True
+    if bCheckThick:
+        for j in range(0,10):
+            last_dist = 0.0
+            select_face = -1
+            for i, f_id in enumerate(need_move_faces):
+                f_center = inlay_bm.faces[f_id].calc_center_median()
+                if (need_center_faces[i] - f_center).length < 0.1:
+                    face_center = inlay_bm.faces[f_id].calc_center_median()
                     
-        # print( 'select_face:', select_face, last_dist )
-        if select_face != -1:
-            inlay_bm.faces[select_face].select_set(True)
-            bpy.ops.transform.translate(value=(0,0,0.1), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=last_dist, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
-        bpy.ops.mesh.select_all(action='DESELECT')
+                    #print( 'face_center', face_center,  boundary_kd )
+                    loc, idx,dist = boundary_kd.find(face_center)
+                    
+                    #print( loc, idx, dist )
+                    
+                    if dist > last_dist and dist > 0.1:
+                        last_dist = dist 
+                        select_face = f_id
+                        
+            #print( 'select_face:', select_face, last_dist )
+            if select_face != -1:
+                inlay_bm.faces[select_face].select_set(True)
+                bpy.ops.transform.translate(value=(0,0,0.1), orient_type='NORMAL',  orient_matrix_type='NORMAL', constraint_axis=(False, False, True), mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=last_dist, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+            bpy.ops.mesh.select_all(action='DESELECT')
+
         
+    
+        
+    #~ bpy.ops.mesh.vertices_smooth(factor=0.5, repeat=2)
+   
+    
+
+        #~ for i in fixed_id_verts:
+            #~ inlay_bm.verts[i].co[0] = fixed_co_verts[i][0]
+            #~ inlay_bm.verts[i].co[1] = fixed_co_verts[i][1]
+            #~ inlay_bm.verts[i].co[2] = fixed_co_verts[i][2]        
+        
+        #~ bpy.ops.mesh.select_mode(use_expand=True, type='VERT')
+        #~ for i in bb_id_verts:
+            #~ inlay_bm.verts[i].select_set(True)
+           
+            #~ offset = mathutils.Vector( fixed_co_verts[i] )  - mathutils.Vector( inlay_bm.verts[i].co )
+
+            #~ bpy.ops.transform.translate(value=offset, orient_type='GLOBAL',  orient_matrix_type='NORMAL',  mirror=False, use_proportional_edit=True, proportional_edit_falloff='SMOOTH', proportional_size=0.5, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+            #~ bpy.ops.mesh.select_all(action='DESELECT')
+
     for i in fixed_id_verts:
         inlay_bm.verts[i].co[0] = fixed_co_verts[i][0]
         inlay_bm.verts[i].co[1] = fixed_co_verts[i][1]
@@ -1303,7 +1939,7 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
         for i in bpy.data.objects:
             # print( i.name.find( inlayObj.name + '.') )
             if i.name.find( inlayObj.name + '.') >= 0:
-                # print( '*********************', i.name, bSmooth )
+                #print( '*********************', i.name, bSmooth )
                 if bSmooth:
                     i.name = 'v2'
                 else:
@@ -1332,59 +1968,148 @@ def inlayPost(surfaceObj, inlayObj, bSmooth=True, separate=True ):
     else:
         selectObj( bpy.data.objects['v1'] )
         
-    
-    #~ bpy.ops.object.editmode_toggle()        
+        
+        
+    ############################# NEW 2015/7/1 ###########################
 
-    #~ inlay_bm = bmesh.from_edit_mesh( bpy.context.active_object.data )
-    #~ v_array = [ v.co for v in inlay_bm.verts if v.select ]
-    #~ out_verts = np.array(v_array)
+    shellObj.select_set(True)
+
+    bpy.ops.object.editmode_toggle()  
     
 
-    #~ f_array = [ (f.verts[0].index, f.verts[1].index, f.verts[2].index ) for f in inlay_bm.faces if f.select ]
+    inlay_bm = bmesh.from_edit_mesh( bpy.context.active_object.data )
+    bpy.ops.mesh.select_mode(type='FACE')
+    bpy.ops.mesh.select_all(action='DESELECT')
+    if shellObj != None:    
+        shell_bm = bmesh.from_edit_mesh( shellObj.data )
+        bpy.ops.mesh.select_all(action='DESELECT')
+        shell_bvh = mathutils.bvhtree.BVHTree.FromBMesh(shell_bm)   
+        inlay_bm.faces.ensure_lookup_table()
+        for i in range(0,50):
+            inlay_bvh = mathutils.bvhtree.BVHTree.FromBMesh(inlay_bm)
+            
+            
+            theList = inlay_bvh.overlap( shell_bvh)
+            
+            if len(theList) == 0:
+                break
+            for f, o_f in theList:
+                inlay_bm.faces[f].select_set(True)
+                bpy.ops.transform.translate(value=(0,0,0.01), constraint_axis=(False, False, True),  orient_type='NORMAL',  orient_matrix_type='NORMAL',  mirror=False, use_proportional_edit=False, proportional_edit_falloff='SMOOTH', proportional_size=0.5, use_proportional_connected=True, use_proportional_projected=False, release_confirm=True)
+                inlay_bm.faces[f].select_set(False)
+                break
     
-    #~ print(len(v_array), len( f_array ))
-    #~ out_faces = np.array( f_array, dtype="object")  
+    bExport = True
     
-    #~ bpy.ops.object.editmode_toggle()      
+    if bExport:
+        v_array = [ v.co for v in inlay_bm.verts if v.select ]
+        out_verts = np.array(v_array)
+        
+
+        f_array = [ (f.verts[0].index, f.verts[1].index, f.verts[2].index ) for f in inlay_bm.faces if f.select ]
+        
+        # print(len(v_array), len( f_array ))
+        out_faces = np.array( f_array, dtype="object")  
+        
+        bpy.ops.object.editmode_toggle()        
     tri_mesh = blender_mesh_to_trimesh(bpy.context.active_object.data)
-    
     return tri_mesh
-    #~ return out_verts, out_faces  
-    
     #~ return out_verts, out_faces
     # bmesh.update_edit_mesh(inlayObj.data)
-def inlayPostWarp(surface_verts, surface_faces,inlay_verts, inlay_faces ):
+def inlayPostWarp(surface_verts, surface_faces,inlay_verts, inlay_faces, shell_verts, shell_faces ):
 
         
 
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False, confirm=False)
     bpy.ops.outliner.orphans_purge()
+    convertMesh( 'shell', shell_verts, shell_faces )
+    shellObj = bpy.context.active_object
     
     convertMesh( 'surface', surface_verts, surface_faces )
     surfaceObj = bpy.context.active_object
     convertMesh( 'inlay', inlay_verts, inlay_faces )
+    
     inlayObj = bpy.context.active_object
-    tri_mesh = inlayPost(surfaceObj, inlayObj)  
+    tri_mesh = inlayPost(surfaceObj, inlayObj, shellObj=shellObj)  
     if bpy.context.mode == 'EDIT_MESH':
         bpy.ops.object.editmode_toggle()
-    
-    # print( tri_mesh )
     return tri_mesh
     
+    
+test_first_thickness = False
 if __name__ == '__main__':
-    # surfaceObj = bpy.data.objects['11 Final Inlay Outer 27']
-    # inlayObj= bpy.data.objects['4_dilation_0.04-0.08_25']
-    f_name = 'result/test_1923202949555814402'
-    # surface_verts, surface_faces = loadStl( f'{f_name}/12_final_inlay_outer_46.stl' )
-    # inlay_verts, inlay_faces = loadStl( f'{f_name}/13_stitched_inlay_46.stl' )  
-    inlay_outer = trimesh.load(f'{f_name}/12_final_inlay_outer_15.ply')
-    stitched_inlay = trimesh.load(f'{f_name}/13_stitched_inlay_15.ply')
-    surface_verts = np.array(inlay_outer.vertices).astype(np.float64)
-    surface_faces = np.array(inlay_outer.faces).astype(np.int32)
-    inlay_verts = np.array(stitched_inlay.vertices).astype(np.float64)
-    inlay_faces = np.array(stitched_inlay.faces).astype(np.int32)
-    tri_mesh = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces )
-    
-    
-    tri_mesh.export('ooout.stl')
+    if test_first_thickness:
+        crownObj = firstFindCrownObj()
+        inlayObj = firstFindInlayObj()
+        
+        
+        testFirst(crownObj, inlayObj)
+        
+    else:
+        
+        # surfaceObj = bpy.data.objects['11 Final Inlay Outer 27']
+        # inlayObj= bpy.data.objects['4_dilation_0.04-0.08_25']
+        #surface_verts, surface_faces = loadStl( '/mnt/e/work/inlay_proj/test/11_final_inlay_outer_27.stl' )
+        # inlay_verts, inlay_faces = loadStl( '/mnt/e/work/inlay_proj/test/12_stitched_inlay_27.stl' )  
+        # inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces )
+        # crownObj = bpy.data.objects['5.5_inflated_outer_25']
+
+      
+        # bpy.ops.wm.save_as_mainfile(filepath='./inlay_test2.blend')
+        # inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
+        
+        
+        #inlayAdjust_obj.check()
+        # inlayAdjust_fn( inlayObj, crownObj, p_size=1.0  )    
+        # inlayAdjust_fn( inlayObj, crownObj, p_size=0.2  )    
+        # inlayAdjust_obj = InlayAdjust(inlayObj, crownObj)
+        # inlayAdjust_obj.onlyCheck()
+        bBatch = False
+        if bBatch:
+            a = [True, False]
+            homeDir = 'E:/work/inlay_data/INLAY_DATA'
+            for b in a:
+                bSmooth = b
+                surfaceObj = None
+                inlayObj = None
+                
+                for jj in os.listdir(homeDir):
+                    
+                    for jjj in os.listdir( homeDir+'/'+ jj  ):
+                            
+                        theDir = homeDir+'/'+ jj + '/' + jjj
+                    
+                        # print( theDir )
+                        try:
+                            for i in os.listdir(theDir):
+                                if i.find( 'final_inlay_outer' ) > 0:
+                                    bpy.ops.import_mesh.stl(filepath=theDir+'/' + i )
+                                    surfaceObj = bpy.context.active_object
+                                
+                                if i.find( 'stitched_inlay' ) > 0:
+                                    #print( '***', theDir+'/' + i )
+                                    bpy.ops.import_mesh.stl(filepath=theDir+'/' + i )
+                                    inlayObj = bpy.context.active_object
+                            
+                            # print( surfaceObj, inlayObj )
+                            
+                            
+                            inlayPost(surfaceObj, inlayObj, bSmooth=bSmooth, separate=True)  
+                            if bSmooth:
+                                bpy.ops.export_mesh.stl(filepath=theDir+'/v2.stl', use_selection=True  )
+                            else:
+                                bpy.ops.export_mesh.stl(filepath=theDir+'/v1.stl', use_selection=True  )
+                            
+                            bpy.ops.object.select_all(action='SELECT')
+
+                            bpy.ops.object.delete(use_global=False, confirm=False)
+                        except:
+                            pass
+        else:
+            
+            surfaceObj = findSurfaceObj()
+            inlayObj = findInlayObj()
+            shellObj = findThicknessShell()
+
+            inlayPost(surfaceObj, inlayObj, shellObj=shellObj, bSmooth=True, separate=True)  

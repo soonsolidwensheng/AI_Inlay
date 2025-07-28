@@ -3,7 +3,7 @@ import traceback
 import trimesh
 
 from inlay_cpu import InlayGeneration
-from utils import read_mesh_bytes, write_mesh_bytes
+from utils import read_mesh_bytes, write_mesh_bytes, compress_drc
 
 
 def run(data):
@@ -19,10 +19,11 @@ def run(data):
     )
     IG.run()
 
-    stitched_inlay, inlay_outer, inner_dilation = (
+    stitched_inlay, inlay_outer, inner_dilation, thickness_shell = (
         IG.get_stitched_inlay(),
         IG.get_inlay_outer(),
         IG.get_inlay_inner(),
+        IG.get_thickness_shell(),
     )
 
     if not isinstance(stitched_inlay, trimesh.Trimesh):
@@ -31,8 +32,19 @@ def run(data):
         inlay_outer = IG.o3d2tri(inlay_outer)
     if not isinstance(inner_dilation, trimesh.Trimesh):
         inner_dilation = IG.o3d2tri(inner_dilation)
+    if not isinstance(thickness_shell, trimesh.Trimesh):
+        thickness_shell = IG.o3d2tri(thickness_shell)
 
-    return stitched_inlay, inlay_outer, inner_dilation
+    return (
+        stitched_inlay,
+        inlay_outer,
+        inner_dilation,
+        thickness_shell,
+        # IG.points_outer_id,
+        IG.points_inner_id,
+        IG.points_edge_outer_id,
+        IG.points_edge_inner_id,
+    )
 
 
 def handler(event, context):
@@ -62,9 +74,10 @@ def handler(event, context):
         po_out = run(data_input)
 
         post_json = {
-            "crown": write_mesh_bytes(po_out[0]),
+            "crown": compress_drc(po_out[0], [po_out[4], po_out[5], po_out[6]]),
             "inlay_outer": write_mesh_bytes(po_out[1]),
             "inner_dilation": write_mesh_bytes(po_out[2]),
+            "thickness_shell": write_mesh_bytes(po_out[3]),
             "modal_function_call_id": None,
         }
         print("suncess postprocess")
@@ -82,110 +95,58 @@ def handler(event, context):
 if __name__ == "__main__":
     import json
     import yaml
+    import os
+    from datetime import datetime
 
-    with open("test_data/studio/AAAD-KSLK/output.json") as f:
-        data = json.load(f)["cpu_process_info"]
-    
-    with open("test_data/studio/AAAD-KSLK/prep_q.json") as f:
-        data_ = json.load(f)
+    # path = 'test_data/jira/1042'
+    path = "test_data/no_adj"
+    cases = os.listdir(f"{path}")
+    # 3c52791e-c482-458d-9aba-89d6a0a356c3
+    # 04aed962-8013-42e2-a42f-43527810086b
+    # 4d01a81b-c52c-4818-b3e9-11f42953e2a4  磨损
+    # 5c3f7f20-a7c0-407c-bee2-9197d644e545  厚度
 
-    for key in data_:
-        data[key] = data_[key]
-        
-    # with open("test_data/pc_test/output.json") as f:
-    #     data = json.load(f)
-    
-    # data["cpu_process_info"]["prep_q"] = data["mesh_prep"]["S"]
-    # data = data["cpu_process_info"]
-    data["prep_q"] = data["mesh_prep"]["S"]
-    mesh = trimesh.load('result/sdudio_good_case/AAAD-KSLK/2_registreation_36.stl')
-    data['stdcrown'] = write_mesh_bytes(mesh)
-    
-    for i in range(1):
-        print(i)
-        # 读取 YAML 文件
-        with open("configs.yaml", "r") as file:
-            config = yaml.safe_load(file)
+    for case in cases:
+        # case = "1f32fa77-4831-44d4-a0a5-ce684bbf33ba"
+        # case = "eeff0902-d1e0-47f0-93f3-44ce659baa7b"
+        try:
+            # f = [x for x in os.listdir(f'{path}/{case}/result') if 'prep_scan' in x][0]
+            # r = datetime.fromtimestamp(os.path.getmtime(f'{path}/{case}/result/{f}'))
+            # if r.hour >= 9 and r.day == 30:
+            #     continue
+            gpu_file = [x for x in os.listdir(f"{path}/{case}") if "gpu" in x][0]
+            post_file = [x for x in os.listdir(f"{path}/{case}") if "post" in x][0]
+            with open(f"{path}/{case}/{gpu_file}/output.json") as f:
+                data = json.load(f)["cpu_process_info"]
 
-        # 修改参数
-        # config["savePath"] = f"./result/test{i + 110}"
-        config["isSave"] = True
-        config["savePath"] = "./result/test_KSLK"
+            with open(f"{path}/{case}/{post_file}/input.json") as f:
+                data_ = json.load(f)
 
-        # 保存修改后的 YAML 文件
-        with open("configs.yaml", "w") as file:
-            yaml.dump(config, file, default_flow_style=False, sort_keys=False)
+            for key in data_:
+                data[key] = data_[key]
 
-        handler(data, None)
-        
-    # import os
-    # import open3d as o3d
-    # import numpy as np
-    # from utils import angle_between_vectors
-    # from icp_w import ipc_exec
-    # from stdcrown import run as std_run
-    # import time
-    
-    # pass_list = []
-    # cases = os.listdir("test_data/studio")
-    # cases_bad = ["AAAD-MAXG", "AAAD-MAN4", "AAAD-MAIX", "AAAD-MADS", "AAAD-KSUT", "AAAD-KSGF"]
-    # cases = [x for x in cases if x not in cases_bad]
-    # for files in cases:
-    #     if files in pass_list:
-    #         continue
-    #     files = "AAAD-KSLK"
-    #     print(files)
-    #     with open(f"test_data/studio/{files}/output.json") as f:
-    #         data = json.load(f)["cpu_process_info"]
-    #     data["prep_q"] = write_mesh_bytes(trimesh.load(f"test_data/studio/{files}/prep_q.stl"))
-    #     pcd = o3d.io.read_point_cloud(f"test_data/studio/{files}/inlayonlay_complete.pcd")
-    #     s1 = time.time()
-    #     pcd.estimate_normals(search_param = o3d.geometry.KDTreeSearchParamHybrid(radius=2, max_nn=60))
-    #     pcd.orient_normals_consistent_tangent_plane(100)
-    #     pcd_tri = trimesh.PointCloud(pcd.points)
-    #     centroid = pcd_tri.centroid
-    #     if angle_between_vectors(np.asarray(pcd.normals)[0], pcd_tri.vertices[0] - centroid) > np.pi / 2:
-    #         pcd.normals = o3d.utility.Vector3dVector(np.asarray(pcd.normals) * -1)
-        
-    #     mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(pcd, o3d.utility.DoubleVector([0.3]))
-    #     s2 = time.time()
-    #     print("pcd2mesh", s2 - s1)
-    #     # mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=8, scale=1.5, linear_fit=False,)[0]
-        
-    #     # partial = trimesh.load(f"test_data/studio/{files}/mesh_partial.stl")
-    #     # prod = trimesh.proximity.ProximityQuery(partial)
-    #     # _, dis, _ = prod.on_surface(np.asarray(mesh.vertices))
-    #     # idx = np.where(dis < 0.05)[0]
-    #     # mesh.remove_vertices_by_index(idx)
-         
-    #     mesh = trimesh.Trimesh(mesh.vertices, mesh.triangles)
-        
-    #     # mesh = mesh.split(only_watertight=False)
-    #     # mesh = mesh[np.argmax(np.array([x.vertices.shape[0] for x in mesh]))]
-    #     std_mesh = std_run({"beiya_id": data.get("beiya_id")})
-    #     s3 = time.time()
-    #     std_mesh_copy = std_mesh.copy()
-    #     std_mesh_copy = std_mesh_copy.simplify_quadric_decimation(face_count=10000)
-    #     mesh = mesh.simplify_quadric_decimation(face_count=6000)
-    #     # mesh.export(f"./result/sdudio/{files}/mesh_complete.stl")
-    #     mat = ipc_exec(std_mesh_copy, mesh, 30)
-    #     std_mesh = std_mesh.apply_transform(mat)
-    #     print("ipc_exec", time.time() - s3)
-    #     data['stdcrown'] = write_mesh_bytes(std_mesh)
-        
-    #     for i in range(1):
-    #         # 读取 YAML 文件
-    #         with open("configs.yaml", "r") as file:
-    #             config = yaml.safe_load(file)
+            # standard = trimesh.load(f"test_data/0617/{case}/std_mesh.stl")
+            # data["stdcrown"] = write_mesh_bytes(standard)
+            # 读取 YAML 文件
+            with open("configs.yaml", "r") as file:
+                config = yaml.safe_load(file)
 
-    #         # 修改参数
-    #         # config["savePath"] = f"./result/test{i + 110}"
-    #         config["isSave"] = True
-    #         config["savePath"] = f"./result/sdudio/{files}"
+            # 修改参数
+            # config["savePath"] = f"./result/test{i + 110}"
+            config["isSave"] = True
+            config["savePath"] = f"{path}/{case}/result"
 
-    #         # 保存修改后的 YAML 文件
-    #         with open("configs.yaml", "w") as file:
-    #             yaml.dump(config, file, default_flow_style=False, sort_keys=False)
+            # 保存修改后的 YAML 文件
+            with open("configs.yaml", "w") as file:
+                yaml.dump(config, file, default_flow_style=False, sort_keys=False)
 
-    #         handler(data, None)
-    #     break
+            # if os.path.exists(f"./result/0616/{case}"):
+            #     continue
+
+            out = handler(data, None)
+            with open('post.json', 'w') as f:
+                json.dump(out, f)
+            break
+        except:
+            print(case)
+            break

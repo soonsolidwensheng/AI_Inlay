@@ -13,13 +13,13 @@ from scipy.spatial import KDTree
 
 from slice_mesh import slice_mesh, slice_mesh2
 from inlaylast import inlayAdjust
-from utils import read_mesh
+from utils import read_mesh, sort_and_remove_close_points
 
 sys.path.append(".")
 sys.path.append("..")
 import tps
 from tps import tps_runner
-from utils import compute_signed_distance, get_distance
+from utils import compute_signed_distance, get_distance, get_thickness_gap
 
 
 class MeshRegistration:
@@ -663,8 +663,8 @@ class MeshRegistration:
         search_num = int(20 * mult)
         for p in boundarySet:
             [k, idx, _] = pcd_tree.search_knn_vector_3d(p, search_num)
-            nv = pcd.normals[idx[0]]
             for j in idx:
+                nv = pcd.normals[j]
                 ps = pcd.points[j]
                 vs = p - ps
                 dot = np.dot(nv, vs)
@@ -858,6 +858,10 @@ class MeshRegistration:
                 # save the ids and dst positions
                 index.append(i)
                 points.append([p, pl])
+            points = np.array(points)
+            new_points_idx = sort_and_remove_close_points(points[:, 1], 0.05)
+            points = points[new_points_idx].tolist()
+            index = np.array(index)[new_points_idx].tolist()
             tempSet = set(
                 boundary_index
             )  # add boundary verts to the index list for stretching the margin
@@ -908,6 +912,7 @@ class MeshRegistration:
                     pts2,
                 )
             mesh = self.doTPS(mesh, pcd, index, points, 1.0)
+            mesh = self.o3d2tri(self.boundarySmooth(mesh.as_open3d))
 
         return mesh
 
@@ -1096,8 +1101,9 @@ class MeshRegistration:
         for i in range(len(boundIndex) - 3):
             i0, i1, i2 = boundIndex[i : i + 3]
             p0 = o3d_mesh.vertices[i0]
+            p1 = o3d_mesh.vertices[i1]
             p2 = o3d_mesh.vertices[i2]
-            o3d_mesh.vertices[i1] = 0.5 * (p0 + p2)
+            o3d_mesh.vertices[i1] = 0.5 * (0.5 * (p0 + p2) + p1)
         return o3d_mesh
 
     def boundaryDel(self, boundaryPoints, mesh):
@@ -1175,7 +1181,7 @@ class MeshRegistration:
         faces_outer = np.array(inlay_outer.faces).astype(np.int32)
         verts_inner = np.array(inlay_inner.vertices).astype(np.float64)
         faces_inner = np.array(inlay_inner.faces).astype(np.int32)
-        groove_vert_ids = lib_tooth_config["oc_points"]
+        # groove_vert_ids = lib_tooth_config["oc_points"]
 
         verts, faces = inlayAdjust(
             verts_outer,
@@ -1226,6 +1232,8 @@ class MeshRegistration:
         # self.inner_dilation = self.o3d2tri(mesh_q)
         self.get_cement_gap(self.o3d2tri(mesh_q))
         print("2. dilation time: ", time.time() - t1)
+        self.thickness_shell, self.inner_dilation = get_thickness_gap(self.inner_dilation)
+        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         if self.isSave:
             self.inner_dilation.export(
                 os.path.join(
@@ -1237,7 +1245,6 @@ class MeshRegistration:
         t1 = time.time()
         boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         has_boundary_mesh = self.doBoundaryTps(mesh, boundarySet)
-        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         print("3. doBoundaryTps time: ", time.time() - t1)
         if self.isSave:
             has_boundary_mesh.export(
@@ -1248,8 +1255,24 @@ class MeshRegistration:
                 )
             )
         # split mesh with boundary=====================================================
+        
         t1 = time.time()
-        sub_mesh = slice_mesh2(has_boundary_mesh, boundarySet)
+        has_boundary_mesh = self.ensure_thickness(has_boundary_mesh, self.thickness_shell)
+        print("5. Thickness time: ", time.time() - t1)
+        if self.isSave:
+            has_boundary_mesh.export(
+                (
+                    os.path.join(
+                        self.save_path, f"5_thickness_{self.teeth_num}.stl"
+                    )
+                )
+            )
+            self.thickness_shell.export(os.path.join(
+                        self.save_path,
+                        f"16_thickness_shell_{self.teeth_num}.ply",
+                    ))
+        t1 = time.time()
+        sub_mesh, nearest_points = slice_mesh2(has_boundary_mesh, boundarySet)
         sub_mesh = self.boundarySmooth(self.tri2o3d(sub_mesh))
         print("6. slice_mesh time: ", time.time() - t1)
         if self.isSave:
@@ -1258,6 +1281,9 @@ class MeshRegistration:
                 os.path.join(self.save_path, f"8_submesh_{self.teeth_num}.stl"),
                 sub_mesh,
             )
+            trimesh.PointCloud(nearest_points).export(os.path.join(self.save_path, f"8.2_nearest_points_{self.teeth_num}.ply"))
+            trimesh.PointCloud(boundarySet).export(os.path.join(self.save_path, f"8.2_boundary_points_{self.teeth_num}.ply"))
+
         
         # sub mesh export to boundary======================================================
         t1 = time.time()
@@ -1269,7 +1295,7 @@ class MeshRegistration:
             )
         # unit surface=====================================================================
         self.inner_dilation_inversed = self.reverse_trimesh(self.inner_dilation).copy()
-        return (sub_mesh, self.inner_dilation_inversed)
+        return (sub_mesh, self.inner_dilation_inversed, self.thickness_shell)
 
 
 def main():

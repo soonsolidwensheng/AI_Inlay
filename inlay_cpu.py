@@ -13,7 +13,7 @@ import yaml
 from InlayAdaptation import InlayAdaptation
 from inlaylast import inlayPostWarp
 from register import MeshRegistration
-from utils import find_changed_faces, find_new_points
+from utils import find_changed_faces, find_new_points, get_thickness_gap2
 
 
 def remove_duplicate(
@@ -130,6 +130,48 @@ class InlayGeneration:
         )
         self.stitched_inlay.compute_vertex_normals()
 
+    def getBoundaryPoints(self, mesh):
+        """get the boundary points of a mesh IN THE ORDER of how they appear in the mesh"""
+        if isinstance(mesh, trimesh.Trimesh):
+            mesh = self.tri2o3d(mesh)
+        mesh.remove_duplicated_vertices()
+        mesh.remove_non_manifold_edges()
+        half_edge_mesh = open3d.geometry.HalfEdgeTriangleMesh.create_from_triangle_mesh(
+            mesh
+        )
+        boundary_point = []
+        normals = []
+        for boundary in half_edge_mesh.get_boundaries():
+            for vertex_id in boundary:
+                boundary_point.append(half_edge_mesh.vertices[vertex_id])
+                normals.append(half_edge_mesh.vertex_normals[vertex_id])
+        return boundary_point, normals
+
+    def get_inner_outer_edge_idx(self):
+        
+        points_edge_inner, _ = self.getBoundaryPoints(self.inner_dilation)
+        points_edge_outer, _ = self.getBoundaryPoints(self.inlay_outer)
+        _, self.points_edge_inner_id = find_new_points(
+            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles), points_edge_inner, 0
+        )
+        _, self.points_edge_outer_id = find_new_points(
+            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles), points_edge_outer, 0
+        )
+        _, self.points_inner_id = find_new_points(
+            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles),
+            self.inner_dilation.vertices,
+            0,
+        )
+        self.points_outer_id = np.setdiff1d(
+            np.arange(len(self.stitched_inlay.vertices)), self.points_inner_id
+        )
+        self.points_inner_id = np.setdiff1d(
+            self.points_inner_id, self.points_edge_inner_id
+        )
+        self.points_outer_id = np.setdiff1d(
+            self.points_outer_id, self.points_edge_outer_id
+        )
+
     def remove_overlaps(
         self, A: open3d.geometry.TriangleMesh, B: open3d.geometry.TriangleMesh
     ) -> None:
@@ -160,7 +202,7 @@ class InlayGeneration:
                 self.anta_scan,
             )
         mesh_registration = MeshRegistration(self.configs)
-        self.inlay_outer, self.inner_dilation = mesh_registration.run(
+        self.inlay_outer, self.inner_dilation, self.thickness_shell = mesh_registration.run(
             self.lib_tooth, self.prep_tooth, self.inlay_inner, self.anta_scan
         )
 
@@ -200,9 +242,11 @@ class InlayGeneration:
             surface_faces = np.array(self.inlay_outer.triangles).astype(np.int32)
             inlay_verts = np.array(self.stitched_inlay.vertices).astype(np.float64)
             inlay_faces = np.array(self.stitched_inlay.triangles).astype(np.int32)
-            self.inlay_outer = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces)
-            
+            self.inlay_outer = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces, self.thickness_shell.vertices, self.thickness_shell.faces)
+            # self.inner_dilation.invert()
             self.stitch()
+            self.thickness_shell = get_thickness_gap2(self.thickness_shell, self.stitched_inlay)
+            self.get_inner_outer_edge_idx()
             if self.configs["isSave"]:
                 open3d.io.write_triangle_mesh(
                     os.path.join(
@@ -218,6 +262,7 @@ class InlayGeneration:
                     ),
                     self.stitched_inlay,
                 )
+                
 
     def run_occlu(self) -> None:
         # registeration =============================================
@@ -226,11 +271,11 @@ class InlayGeneration:
         s = time.time()
         inlay_adaptation = InlayAdaptation()
         inlay_adaptation.setConfig(self.configs)
-        mesh_registration = MeshRegistration(self.configs)
-        boundarySet, _ = mesh_registration.getBoundaryPoints(self.inner_dilation)
-        self.inlay_outer = mesh_registration.doSubMeshTps(
-            boundarySet, self.inlay_outer, mesh_registration.lastSubmehs_tps_dis
-        )
+        # mesh_registration = MeshRegistration(self.configs)
+        # boundarySet, _ = mesh_registration.getBoundaryPoints(self.inner_dilation)
+        # self.inlay_outer = mesh_registration.doSubMeshTps(
+        #     boundarySet, self.inlay_outer, mesh_registration.lastSubmehs_tps_dis
+        # )
         
         if isinstance(self.inlay_outer, trimesh.Trimesh):
             self.inlay_outer = self.tri2o3d(self.inlay_outer)
@@ -310,3 +355,6 @@ class InlayGeneration:
 
     def get_inlay_inner(self) -> open3d.geometry.TriangleMesh:
         return self.inner_dilation
+
+    def get_thickness_shell(self) -> open3d.geometry.TriangleMesh:
+        return self.thickness_shell

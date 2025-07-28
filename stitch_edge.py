@@ -6,7 +6,7 @@ import numpy as np
 import trimesh
 
 from inlay_cpu import InlayGeneration, MeshRegistration
-
+from utils import compress_drc
 
 def write_mesh_bytes(mesh, preserve_order=False, colors=None):
     # 设置 Draco 编码选项
@@ -48,8 +48,16 @@ def run(data):
     IG.inner_dilation = mesh_registration.inner_dilation
     IG.inlay_outer = IG.lib_tooth
     IG.stitch()
+    IG.get_inner_outer_edge_idx()
 
-    return IG.o3d2tri(IG.get_stitched_inlay()), IG.inner_dilation
+    return (
+        IG.o3d2tri(IG.get_stitched_inlay()),
+        IG.inner_dilation,  
+        # IG.points_outer_id,
+        IG.points_inner_id,
+        IG.points_edge_outer_id,
+        IG.points_edge_inner_id,
+    )
 
 
 def handler(event, context):
@@ -70,7 +78,7 @@ def handler(event, context):
         stitch_out = run(data_input)
 
         stitch_json = {
-            "crown": write_mesh_bytes(stitch_out[0]),
+            "crown": compress_drc(stitch_out[0], [stitch_out[2], stitch_out[3], stitch_out[4]]),
             "inner_dilation": write_mesh_bytes(stitch_out[1]),
             "modal_function_call_id": None,
         }
@@ -88,6 +96,11 @@ def handler(event, context):
 
 if __name__ == "__main__":
     import json
-    with open('test_data/41b82e63-ac82-4522-b8b5-6012e35445df/post_c005ab3b-0c2a-43d1-81ef-2ab5bf66b884/output.json') as f:
+
+    with open(
+        "test_data/0616/b02330f0-d509-41e6-bc95-38f058478d96/post_961b8aa6-46ea-4766-b91c-340f1fdad6c8/output.json"
+    ) as f:
         event = json.load(f)
-    print(handler(event, None))
+    out = handler(event, None)
+    with open('stitch.json', 'w') as f:
+        json.dump(out, f)

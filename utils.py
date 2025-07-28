@@ -1,5 +1,7 @@
 import base64
-
+import copy
+import random
+import pylfda
 import DracoPy
 import MQCompressPy
 import numpy as np
@@ -9,6 +11,7 @@ import networkx as nx
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import cKDTree
+from tps import TPS
 # import pypruners
 
 
@@ -29,7 +32,7 @@ def write_mesh_bytes(mesh, preserve_order=False, colors=None):
         mesh.vertices,
         mesh.faces,
         preserve_order=preserve_order,
-        quantization_bits=14,
+        quantization_bits=20,
         compression_level=10,
         colors=colors,
     )
@@ -40,8 +43,8 @@ def write_mesh_bytes(mesh, preserve_order=False, colors=None):
 
 def compress_drc(mesh, points_id=[]):
     vert_flags = np.zeros(len(mesh.vertices), dtype=np.uint8)
-    vert_flags[points_id] = 1
-    # trimesh.PointCloud(mesh.vertices[points_id]).export('p.ply')
+    for i in range(len(points_id)):
+        vert_flags[points_id[i]] = i + 1
     in_mesh = MQCompressPy.MQC_Mesh()
     in_mesh.verts = MQCompressPy.VerticeArray(mesh.vertices)
     in_mesh.faces = MQCompressPy.FaceArray(mesh.faces)
@@ -62,11 +65,14 @@ def compress_drc(mesh, points_id=[]):
 
 
 def read_mesh_bytes(buffer):
-    a = base64.b64decode(buffer)
-    mesh_object = DracoPy.decode_buffer_to_mesh(a)
-    V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
-    F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
-    return trimesh.Trimesh(V, F).as_open3d
+    if buffer is not None:
+        a = base64.b64decode(buffer)
+        mesh_object = DracoPy.decode_buffer_to_mesh(a)
+        V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
+        F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
+        return trimesh.Trimesh(V, F).as_open3d
+    else:
+        return None
 
 
 def compute_signed_distance(mesh: trimesh.Trimesh, q_points):
@@ -376,3 +382,212 @@ def find_boundaries(mesh):
     out = b[~np.isin(b, a)]
 
     return np.asarray(mesh.vertices)[out], out
+
+def get_neighbors(p_ids, iter_num, mesh):
+    def get_next_neighbor(n_id):
+        neighbors_id = []
+        for i in n_id:
+            neighbors_id.extend(mesh.vertex_neighbors[i])
+        return list(set(neighbors_id))
+
+    out_ids = []
+    for p_id in p_ids:
+        out_id = [p_id]
+        for _ in range(iter_num):
+            out_id.extend(get_next_neighbor(out_id))
+        out_ids.append(np.unique(out_id))
+    return out_ids
+
+def get_thickness_gap(mesh_input):
+    def find_unique_elements(lst):
+        array = np.array(lst)
+        unique, counts = np.unique(array, return_counts=True)
+        unique_elements = unique[counts == 1]
+        return unique_elements.tolist()
+    mesh_inner = copy.deepcopy(mesh_input)
+    # mesh_inner.invert()
+    if mesh_inner.faces.shape[0] > 10000:
+        # desired_count = 5000
+        # mesh = pylfda.Mesh()
+        # mesh.vertices, mesh.faces = mesh_inner.vertices, mesh_inner.faces
+        # decimationType = pylfda.DecimationType.Vertex
+        # max_normal_deviation = 1
+        # fix_boundary = True
+        # out = pylfda.decimate_mesh(
+        #     mesh, desired_count, decimationType, max_normal_deviation, fix_boundary
+        # )
+        # if out:
+        #     mesh_inner = trimesh.Trimesh(mesh.vertices, mesh.faces)
+        mesh_inner_o3d = mesh_inner.as_open3d
+        mesh_inner_o3d = mesh_inner_o3d.simplify_quadric_decimation(target_number_of_triangles=10000, )
+        mesh_inner = trimesh.Trimesh(mesh_inner_o3d.vertices, mesh_inner_o3d.triangles)
+    for _ in range(5):
+        result = find_unique_elements(mesh_inner.faces.flatten())
+        if not len(result):
+            break
+        mesh_inner_o3d = mesh_inner.as_open3d
+        mesh_inner_o3d.remove_vertices_by_index(result)
+        mesh_inner_o3d.compute_vertex_normals()
+        mesh_inner = trimesh.Trimesh(np.round(mesh_inner_o3d.vertices, 4), mesh_inner_o3d.triangles, vertex_normals=mesh_inner_o3d.vertex_normals)
+    inner = copy.deepcopy(mesh_inner)
+    mesh_inner = mesh_inner.as_open3d
+    mesh_inner.compute_vertex_normals()
+    mesh_inner = trimesh.Trimesh(mesh_inner.vertices, mesh_inner.triangles)
+    points = []
+    outlines = mesh_inner.outline().referenced_vertices
+    # 构建 KD 树
+    tree = cKDTree(mesh_inner.vertices[outlines])
+    # 计算每个点到另一个点云的最小距离
+    distances, v2edge_id = tree.query(mesh_inner.vertices)
+    n = []
+    o_n = []
+    k_p = []
+    for k in range(len(mesh_inner.vertices)):
+        a = mesh_inner.vertex_normals[k]
+        if k in outlines:
+            o_n.append(k)
+            k_p.append(k)
+            points.append(mesh_inner.vertices[k])
+            # points.append(mesh_inner.vertices[k])
+            continue
+        n_id = get_neighbors([k], 3, mesh_inner)
+        b = mesh_inner.vertex_normals[np.unique([t for x in n_id for t in x])]
+        cos_angle = [np.dot(a, x) for x in b]
+        angle = np.max(np.arccos(np.array(cos_angle) - 1e-6) / 3.141592653 * 180)
+        if distances[k] < 0.5:
+            outlines = np.append(outlines, k)
+            o_n.append(k)
+            k_p.append(k)
+            points.append(mesh_inner.vertices[k] + a * 0.01)
+            continue
+        # elif distances[k] < 0.5:
+        #     o_n.append(k)
+        #     k_p.append(k)
+        #     # points.append(mesh_inner.vertices[k] + a * (0.1 / 0.4 * (distances[k] - 0.1)))
+        #     points.append(mesh_inner.vertices[k] + a * 0.01)
+        #     continue
+        elif distances[k] < 1:
+            o_n.append(k)
+            if angle > 20:
+                n.append(k)
+                points.append(mesh_inner.vertices[k])
+                continue
+            else:
+                points.append(mesh_inner.vertices[k] + a * (0.6 - 0.01) / 1.5 * (distances[k] - 0.5))
+                continue
+        else:
+            if angle > 20:
+                n.append(k)
+                points.append(mesh_inner.vertices[k])
+                continue
+            else:
+                v_n = a
+                points.append(mesh_inner.vertices[k] + v_n * 0.55)
+    points_id = random.sample(
+        [x for x in range(len(mesh_inner.vertices)) if x not in k_p],
+        len(mesh_inner.vertices) // 3,
+    )
+    points_id = [x for x in points_id if x not in n]
+    points_id.extend(k_p)
+    points_tps = np.array(points)[points_id]
+    trans = TPS(mesh_inner.vertices[points_id], points_tps, lambda_=0.5)
+    mesh_beiya = trimesh.Trimesh(trans(mesh_inner.vertices), mesh_inner.faces)
+    # mesh_beiya = tps(mesh_inner, points_id, points_tps)
+    dis_p = [x for x in range(len(mesh_inner.vertices)) if x not in o_n]
+    dis = compute_signed_distance(mesh_inner, mesh_beiya.vertices[dis_p])[0]
+    dis_id = np.where(dis > 0)[0]
+    if len(dis_id):
+        p_id = np.array(dis_p)[dis_id]
+        p = mesh_beiya.vertices[p_id]
+        p += mesh_beiya.vertex_normals[p_id] * (dis[dis_id] + 0.55).reshape(-1, 1)
+        p_id = np.hstack([p_id, o_n])
+        p = np.vstack([p, mesh_beiya.vertices[o_n]])
+        not_in_p_id = [x for x in range(len(mesh_beiya.vertices)) if x not in p_id]
+        n_p_id = random.sample(not_in_p_id, len(not_in_p_id) // 5)
+        p_id = np.hstack([p_id, n_p_id])
+        p = np.vstack([p, mesh_beiya.vertices[n_p_id]])
+        trans_ = TPS(mesh_beiya.vertices[p_id], p, lambda_=0.5)
+        thickness_shell = trimesh.Trimesh(trans_(mesh_beiya.vertices), mesh_beiya.faces)
+        # thickness_shell = tps(mesh_beiya, p_id, p)
+    else:
+        thickness_shell = mesh_beiya
+    thickness_shell.vertices[outlines] = np.array(points)[outlines]
+
+    t_o3d = thickness_shell.as_open3d
+    t_o3d.remove_vertices_by_index(outlines)
+    thickness_shell = trimesh.Trimesh(t_o3d.vertices, t_o3d.triangles)
+
+    return thickness_shell, inner
+
+def get_thickness_gap2(thickness_shell, mesh_crown):
+    scene = open3d.t.geometry.RaycastingScene()
+    scene.add_triangles(open3d.t.geometry.TriangleMesh.from_legacy(mesh_crown))
+    in_mesh = scene.compute_occupancy(
+        np.array(thickness_shell.vertices, dtype=np.float32)
+    )
+    dis_id = np.where(in_mesh.numpy() == 0)[0]
+    if len(dis_id):
+        p = scene.compute_closest_points(
+            np.array(thickness_shell.vertices[dis_id], dtype=np.float32)
+        )["points"].numpy()
+        thickness_shell.vertices[dis_id] = thickness_shell.vertices[dis_id] + 1.3 * (
+            p - thickness_shell.vertices[dis_id]
+        )
+    return thickness_shell
+
+def sort_and_remove_close_points(points, threshold=0.5):
+    """
+    Sorts a set of 3D points that form an irregular closed curve and removes points that are too close to each other.
+    Returns the indices of the sorted points.
+
+    Parameters
+    ----------
+    points : (n, 3) float
+        Array of 3D points.
+    threshold : float, optional
+        Minimum distance between points (default is 0.5).
+
+    Returns
+    -------
+    sorted_indices : (m,) int
+        Indices of the sorted points with close points removed.
+    """
+    # Initialize the sorted indices list with the index of the first point
+    sorted_indices = [0]
+    remaining_indices = list(range(1, len(points)))
+
+    while remaining_indices:
+        # Get the last point in the sorted list
+        last_point = points[sorted_indices[-1]]
+
+        # Calculate distances from the last point to all remaining points
+        remaining_points = points[remaining_indices]
+        distances = np.linalg.norm(remaining_points - last_point, axis=1)
+
+        # Find the index of the closest point
+        closest_index = np.argmin(distances)
+        closest_distance = distances[closest_index]
+
+        # Check if the closest point is too close
+        if closest_distance > threshold:
+            # Add the index of the closest point to the sorted list
+            sorted_indices.append(remaining_indices[closest_index])
+            # Remove the closest point from the remaining indices
+            del remaining_indices[closest_index]
+        else:
+            # If the closest point is too close, remove it and continue
+            del remaining_indices[closest_index]
+
+    return np.array(sorted_indices)
+
+
+if "__main__" == __name__:
+    import os
+    import json
+    import traceback
+    import pylfda
+
+    prep_q = trimesh.load('test_data/thickness_shell/9ac5fe0e-e1ba-46a0-88a2-afdfbdbd1b51/result/3_dilation_0.04-0.08_16.stl')
+    prep_q.invert()
+    thickness_shell, mesh_inner = get_thickness_gap(prep_q)
+    thickness_shell.export('test_data/thickness_shell/9ac5fe0e-e1ba-46a0-88a2-afdfbdbd1b51/post_2b9236d4-a615-4f0a-8290-718a618ccf19/ts.stl')
