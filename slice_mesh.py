@@ -121,6 +121,7 @@ def slice_mesh2(mesh, points):
     cutter = MeshCutter(mesh.vertices, mesh.faces)
     result_mesh = cutter.cut_mesh(nearest_points)
     mesh_list = result_mesh.split(only_watertight=False)
+    mesh_list = [x for x in mesh_list if len(x.faces) > 10]
     result_mesh = mesh_list[np.argmax([np.min(x.vertices[:, 1]) for x in mesh_list])]
     return result_mesh, nearest_points
 

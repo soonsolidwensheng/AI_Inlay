@@ -22,14 +22,14 @@ This is the code base for generation and post processing algorithms that design 
 - [x] Redesign of the approximal adaptation algorithm
 - [x] WebUI deployment
 - [x] Robust collision detection in occlusal adaptation
+- [x] Studio handoff
 
 ## Under Development
 
-- [ ] Studio handoff
+- [ ] Generation of two adjacent inlays (in terms of adjacency relationships)
 
 ## TODOs
 
-- [ ] Generation of two adjacent inlays (in terms of adjacency relationships)
 
 ## Modal Deployment
 
@@ -59,6 +59,8 @@ This is the code base for generation and post processing algorithms that design 
   - Description: Generate inlay based on initial position
   - URL: `https://modal--example-name-postprocess-app.model.run/postprocess`
   - Input Parameters:
+    - 'multi_restoration': true is multi restoration
+    - 'rot_matrix': matrix from gpu
     - 'mesh_beiya': Preparation
     - 'prep_q': Inlay inner crown (without gap filling)
     - 'mesh_upper': Upper jaw
@@ -95,6 +97,8 @@ This is the code base for generation and post processing algorithms that design 
   - Description: Stitch outer crown and inner crown
   - URL: `https://modal--example-name-stitch-edge-app.model.run/stitch_edge`
   - Input Parameters:
+    - 'multi_restoration': true is multi restoration
+    - 'rot_matrix': matrix from gpu
     - 'inner_dilation': Inlay inner crown (without gap filling)
     - 'inlay_outer': Inlay outer crown
   - Output Parameters:

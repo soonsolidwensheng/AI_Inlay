@@ -6,6 +6,7 @@
 
 这是一个用于从AI预测生成和后处理算法设计嵌体网格的代码库。
 
+
 ## 已实现
 
 - [x] 可调节的水泥间隙
@@ -22,14 +23,18 @@
 - [x] 重新设计近端调整算法
 - [x] WebUI 部署
 - [x] 咬合调整中的稳健碰撞检测
+- [x] Studio 交接
+- [x] 多嵌体生成
+- [x] 术前镜像流程
 
 ## 开发中
 
-- [ ] Studio 交接
+- [ ] 
+
 
 ## 待办事项
 
-- [ ] 连续两颗嵌体的生成（邻接关系方面）
+
 
 ## modal部署
 
@@ -39,7 +44,7 @@
 
 - mesh_repair
   - 描述：网格修复
-  - url： `https://modal--example-name-mesh-repair-app.model.run/mesh_repair`
+  - url： `/mesh_repair`
   - 输入参数：
     - 'mesh_upper': 上颌模型
     - 'mesh_lower'：下颌模型
@@ -48,17 +53,31 @@
     - 'mesh_lower'：下颌模型
 
 - stdcrown
-  - 描述：标准冠生成接口
-  - url： `https://modal--example-name-stdcrown-app.model.run/stdcrown`
+  - 描述：术前、镜像流程标准冠生成接口
+  - url： `/stdcrown`
   - 输入参数：
-    - 'beiya_id': 备牙ID
+    - 术前输入
+      - 'preop_or_mirror': 'preop' 表示进行术前流程
+      - 'beiya_id': str 备牙ID
+      - 'std_crown': drc gpu输出的初始位置牙冠
+      - 'pre_op_crown': drc 术前牙冠
+      - 'preop_matrix': list 术前匹配术后的4*4变换矩阵
+    - 镜像输入
+      - 'preop_or_mirror': 'mirror' 表示进行镜像流程
+      - 'std_crown': drc gpu输出的初始位置牙冠
+      - 'mirror_id': str 镜像牙ID
+      - 'beiya_id': str 备牙ID
+      - 'rot_matrix': list gpu输出，分割结果到牙冠局部坐标系的变换矩阵
+      - 'all_other_crown': gpu输出，每颗牙齿的分割结果
   - 输出参数：
-    - 'stdcrown': 牙冠初始位置
+    - 'stdcrown': drc 牙冠初始位置
 
 - postprocess
   - 描述： 根据初始位置生成嵌体
-  - url: `https://modal--example-name-postprocess-app.model.run/postprocess`
+  - url: `/postprocess`
   - 输入参数：
+    - 'multi_restoration': 是否是多修复体
+    - 'rot_matrix': 坐标变换矩阵
     - 'mesh_beiya': 备牙
     - 'prep_q'： 嵌体内冠（无填充间隙）
     - 'mesh_upper'： 上颌
@@ -76,7 +95,7 @@
 
 - occlusion
   - 描述：对手动调整后的嵌体进行咬合、邻接、厚度调整
-  - url: `https://modal--example-name-occlusion-app.model.run/occlusion`
+  - url: `/occlusion`
   - 输入参数：
     - 'inner_dilation'： 嵌体内冠（有填充间隙）
     - 'mesh_upper'： 上颌
@@ -93,8 +112,10 @@
 
 - stitch_edge
   - 描述：缝合外冠和内冠
-  - url: `https://modal--example-name-stitch-edge-app.model.run/stitch_edge`
+  - url: `/stitch_edge`
   - 输入参数：
+    - 'multi_restoration': 是否是多修复体
+    - 'rot_matrix': 坐标变换矩阵
     - 'inner_dilation'： 嵌体内冠（无填充间隙）
     - 'inlay_outer'： 嵌体外冠
   - 输出参数：

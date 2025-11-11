@@ -20,7 +20,9 @@ sys.path.append("..")
 import tps
 from tps import tps_runner
 from utils import compute_signed_distance, get_distance, get_thickness_gap
-
+import py_prepMorphing as morph
+from undercut_util import get_insert_direction_copy
+from directional_undercut_filling import filling_undercut, rotation_matrix_from_vectors
 
 class MeshRegistration:
     def __init__(self, configs):
@@ -47,6 +49,7 @@ class MeshRegistration:
         self.save_path = configs["save_path"]
         self.lib_tooth_configs = configs["tooth_lib_configs"]
         self.adjust_crown = configs["adjust_crown"]
+        self.fill_undercut = configs["fill_undercut"]
 
     def calcuPerPoint(self, p, a, b):
         v1 = p - a
@@ -1220,6 +1223,10 @@ class MeshRegistration:
                 os.path.join(self.save_path, f"0_lib_tooth_{self.teeth_num}.ply"),
                 mesh_source,
             )
+            o3d.io.write_triangle_mesh(
+                os.path.join(self.save_path, f"1_q_{self.teeth_num}.ply"),
+                mesh_q,
+            )
             o3d.io.write_point_cloud(
                 os.path.join(self.save_path, f"1_b_sub_q_{self.teeth_num}.ply"), pcd_b_q
             )
@@ -1230,27 +1237,137 @@ class MeshRegistration:
         t1 = time.time()
         # self.liftingMesh(mesh_q, self.cement_gap_spacing, self.cement_gap_spacing_boundary, self.q_lift_radius)  #mesh, liftDis, initDis, redius
         # self.inner_dilation = self.o3d2tri(mesh_q)
+        
+        if self.fill_undercut:
+            insert_direction = get_insert_direction_copy(mesh_q)
+            mesh_q = filling_undercut(mesh_q, insert_direction, display=False)[0].as_open3d
+            if self.save_path:
+                cylinder = trimesh.creation.cylinder(
+                    0.1,
+                    5,
+                    transform=rotation_matrix_from_vectors([0, 0, 1], insert_direction)[0],
+                )
+                cylinder.apply_translation([0, 5, 0])
+                cylinder.export(os.path.join(self.save_path, "cylinder1.stl"))
         self.get_cement_gap(self.o3d2tri(mesh_q))
-        print("2. dilation time: ", time.time() - t1)
-        self.thickness_shell, self.inner_dilation = get_thickness_gap(self.inner_dilation)
-        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         if self.isSave:
             self.inner_dilation.export(
                 os.path.join(
                     self.save_path, f"3_dilation_0.04-0.08_{self.teeth_num}.stl"
                 )
             )
+            o3d.io.write_triangle_mesh(
+                os.path.join(self.save_path, f"3_q_{self.teeth_num}.ply"),
+                mesh_q,
+            )
+            
+        print("2. dilation time: ", time.time() - t1)
+        self.thickness_shell, self.inner_dilation = get_thickness_gap(self.inner_dilation)
+        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
+        use_morph = False
 
         # Boundary TPS=================================================================
         t1 = time.time()
-        boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
-        has_boundary_mesh = self.doBoundaryTps(mesh, boundarySet)
+        if use_morph:
+            V_b = np.asarray(mesh_target.vertices, dtype=np.float64)
+            F_b = np.asarray(mesh_target.triangles, dtype=np.int32)
+            V_q = np.asarray(mesh_q.vertices, dtype=np.float64)
+            F_q = np.asarray(mesh_q.triangles, dtype=np.int32)
+            V_std = mesh.vertices.astype(np.float64)
+            F_std = mesh.faces.astype(np.int32)
+            
+            success, V_unmatch, F_unmatch = morph.UnMatchMesh(V_b, F_b, V_q, F_q, False, 10)
+            if self.isSave:
+                trimesh.Trimesh(V_unmatch, F_unmatch).export(
+                    (
+                        os.path.join(
+                            self.save_path, f"4.0_unmatch_{self.teeth_num}.stl"
+                        )
+                    )
+                )
+            # =============================================================================
+            # 函数：UnMatchMesh
+            # 功能：在目标网格中查找与待匹配网格重叠（或未重叠）的三角面片，
+            #       返回未匹配部分的几何与拓扑。
+            # =============================================================================
+            # 输入参数
+            # V_waitMatch : np.ndarray, shape (N, 3)
+            #     待匹配网格的顶点坐标
+            # F_waitMatch : np.ndarray, shape (M, 3)
+            #     待匹配网格的三角面索引
+            # V_to : np.ndarray, shape (K, 3)
+            #     目标网格的顶点坐标
+            # F_to : np.ndarray, shape (L, 3)
+            #     目标网格的三角面索引
+            # isAddSrcBoundary : bool, optional (default=False)
+            #     是否保留原始网格的外围边界作为额外约束
+            # addBoundaryNums : int, optional
+            #     当 isAddSrcBoundary 为 True 时，额外添加的边界层数
+            # disthr : float, optional (default=0.01)
+            #     距离阈值；小于该值的区域视为已匹配
+            # removeAreaThr : float, optional (default=5)
+            #     面积阈值；未匹配区域中面积小于该值的小片将被剔除
+            #
+            # 返回值
+            # success : int
+            #     >0 表示算法成功
+            # V_unmatch : np.ndarray, shape (P, 3)
+            #     未匹配区域的顶点坐标
+            # F_unmatch : np.ndarray, shape (Q, 3)
+            #     未匹配区域的三角面索引
+            # =============================================================================
+            dstOrient = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            mean_point = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+            # mean_point = V_unmatch.mean(axis=0)
+            success, coverageRatio ,symmetryScore = morph.DetectSymmetryAndUniformity(V_unmatch, F_unmatch, mean_point ,dstOrient, 70)
+            # =============================================================================
+            # 函数：DetectSymmetryAndUniformity
+            # 功能：检测给定三角网格在某一“主朝向轴”方向上的圆周覆盖率及对称性
+            # =============================================================================
+            # 输入参数
+            # V_src : np.ndarray, shape (N, 3)
+            #     源网格的顶点坐标
+            # F_src : np.ndarray, shape (M, 3)
+            #     源网格的三角面索引
+            # PrincipalCentroid : np.ndarray, shape (3,)
+            #     用于分析的“中心点”——通常是把网格投影到主朝向轴时的原点
+            # PrincipalAxis : np.ndarray, shape (3,)
+            #     主朝向轴（单位向量），网格将沿该轴方向进行圆周展开分析
+            # normalFilterAngle : float, optional (default=70.0)
+            #     法向角度过滤阈值（单位：度）。三角面法向与主朝向轴的夹角小于该值
+            #     的三角面会被剔除，不参与覆盖率与对称性的计算
+            #
+            # 返回值
+            # success : int
+            #     >0 表示检测成功
+            # coverageRatio : float
+            #     圆周覆盖率 [0, 1]，推荐值 ≥ 0.7 视为合格
+            # symmetryScore : float
+            #     对称性指数 [0, 1]，推荐值 ≥ 0.7 视为合格
+            # =============================================================================
+            if len(mesh.faces) > 20000:
+                mesh = trimesh.Trimesh.simplify_quadric_decimation(mesh, 20000)
+            if coverageRatio < 80:
+                print("覆盖率小于80%，不使用morph")
+                use_morph = False
+            elif symmetryScore < 0.3:
+                print("对称性小于0.3，不使用morph")
+                use_morph = False
+            else:
+                print(f"覆盖率: {coverageRatio:.2f}%", f"对称性得分: {symmetryScore:.2f}", "使用morph")
+                use_morph = True
+                success, V_out, F_out = morph.Morphing(V_std, F_std, V_unmatch, F_unmatch, iters=100, isNomalMorphing=True)
+                has_boundary_mesh = trimesh.Trimesh(V_out, F_out)
+        if not use_morph:
+        # if True:
+            # boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
+            has_boundary_mesh = self.doBoundaryTps(mesh, boundarySet)
         print("3. doBoundaryTps time: ", time.time() - t1)
         if self.isSave:
             has_boundary_mesh.export(
                 (
                     os.path.join(
-                        self.save_path, f"4.1_boundary_TPSed_{self.teeth_num}.stl"
+                        self.save_path, f"4.1_boundary_TPSed_{self.teeth_num}_use_morph_{use_morph}_time_{time.time() - t1}.stl"
                     )
                 )
             )

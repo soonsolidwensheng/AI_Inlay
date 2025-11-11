@@ -13,7 +13,7 @@ import yaml
 from InlayAdaptation import InlayAdaptation
 from inlaylast import inlayPostWarp
 from register import MeshRegistration
-from utils import find_changed_faces, find_new_points, get_thickness_gap2
+from utils import find_changed_faces, find_new_points, get_thickness_gap2, stitch_edge
 
 
 def remove_duplicate(
@@ -34,8 +34,9 @@ class InlayGeneration:
         inlay_inner: open3d.geometry.TriangleMesh,
         upper_scan: open3d.geometry.TriangleMesh,
         lower_scan: open3d.geometry.TriangleMesh,
-        adjacent_teeth: List[open3d.geometry.TriangleMesh],
         standard: open3d.geometry.TriangleMesh,
+        adjacent_teeth: List[open3d.geometry.TriangleMesh] = [],
+        fill_undercut: bool = False,
         save_path: str = None,
         paras: dict = None,
     ) -> None:
@@ -64,6 +65,7 @@ class InlayGeneration:
         self.configs["teeth_num"] = str(self.tid)
         self.configs["save_path"] = self.save_path
         self.configs["tooth_lib_configs"] = self.tooth_lib_configs
+        self.configs["fill_undercut"] = fill_undercut
 
     def get_configs(self):
         with open("configs.yaml", "r") as f:
@@ -130,6 +132,33 @@ class InlayGeneration:
         )
         self.stitched_inlay.compute_vertex_normals()
 
+    def stitch_new(self):
+        if isinstance(self.inner_dilation, trimesh.Trimesh):
+            dilation = self.inner_dilation
+        else:
+            dilation = self.o3d2tri(self.inner_dilation)
+        if isinstance(self.inlay_outer, trimesh.Trimesh):
+            outer = self.inlay_outer
+        else:
+            outer = self.o3d2tri(self.inlay_outer)
+
+        (
+            result_mesh,
+            self.points_outer_id,
+            self.points_inner_id,
+            self.points_edge_outer_id,
+            self.points_edge_inner_id,
+        ) = stitch_edge(outer, dilation)
+
+        self.stitched_inlay = open3d.geometry.TriangleMesh(
+            open3d.utility.Vector3dVector(result_mesh.vertices),
+            open3d.utility.Vector3iVector(result_mesh.faces),
+        )
+        self.stitched_inlay.compute_vertex_normals()
+        self.inlay_outer = self.stitched_inlay.select_by_index(
+            np.concatenate([self.points_outer_id, self.points_edge_outer_id])
+        )
+
     def getBoundaryPoints(self, mesh):
         """get the boundary points of a mesh IN THE ORDER of how they appear in the mesh"""
         if isinstance(mesh, trimesh.Trimesh):
@@ -148,17 +177,26 @@ class InlayGeneration:
         return boundary_point, normals
 
     def get_inner_outer_edge_idx(self):
-        
         points_edge_inner, _ = self.getBoundaryPoints(self.inner_dilation)
         points_edge_outer, _ = self.getBoundaryPoints(self.inlay_outer)
         _, self.points_edge_inner_id = find_new_points(
-            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles), points_edge_inner, 0
+            trimesh.Trimesh(
+                self.stitched_inlay.vertices, self.stitched_inlay.triangles
+            ),
+            points_edge_inner,
+            0,
         )
         _, self.points_edge_outer_id = find_new_points(
-            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles), points_edge_outer, 0
+            trimesh.Trimesh(
+                self.stitched_inlay.vertices, self.stitched_inlay.triangles
+            ),
+            points_edge_outer,
+            0,
         )
         _, self.points_inner_id = find_new_points(
-            trimesh.Trimesh(self.stitched_inlay.vertices, self.stitched_inlay.triangles),
+            trimesh.Trimesh(
+                self.stitched_inlay.vertices, self.stitched_inlay.triangles
+            ),
             self.inner_dilation.vertices,
             0,
         )
@@ -202,8 +240,10 @@ class InlayGeneration:
                 self.anta_scan,
             )
         mesh_registration = MeshRegistration(self.configs)
-        self.inlay_outer, self.inner_dilation, self.thickness_shell = mesh_registration.run(
-            self.lib_tooth, self.prep_tooth, self.inlay_inner, self.anta_scan
+        self.inlay_outer, self.inner_dilation, self.thickness_shell = (
+            mesh_registration.run(
+                self.lib_tooth, self.prep_tooth, self.inlay_inner, self.anta_scan
+            )
         )
 
         s = time.time()
@@ -211,10 +251,10 @@ class InlayGeneration:
         inlay_adaptation.setConfig(self.configs)
         self.inlay_outer = self.tri2o3d(self.inlay_outer)
 
-
         # fill gap ==================================================
         s = time.time()
         self.stitch()
+        # self.stitch_new()
         print("10. stitching time: ", time.time() - s)
 
         if isinstance(self.inlay_outer, trimesh.Trimesh):
@@ -237,16 +277,22 @@ class InlayGeneration:
                 ),
                 self.stitched_inlay,
             )
+            self.inner_dilation.export(os.path.join(
+                    self.configs["save_path"], f"12.1_stitched_inlay_inner_{self.tid}.ply"
+                ))
         if self.configs["adjust_crown"]:
             surface_verts = np.array(self.inlay_outer.vertices).astype(np.float64)
             surface_faces = np.array(self.inlay_outer.triangles).astype(np.int32)
             inlay_verts = np.array(self.stitched_inlay.vertices).astype(np.float64)
             inlay_faces = np.array(self.stitched_inlay.triangles).astype(np.int32)
-            self.inlay_outer = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces, self.thickness_shell.vertices, self.thickness_shell.faces)
-            # self.inner_dilation.invert()
-            self.stitch()
-            self.thickness_shell = get_thickness_gap2(self.thickness_shell, self.stitched_inlay)
-            self.get_inner_outer_edge_idx()
+            self.inlay_outer = inlayPostWarp(
+                surface_verts,
+                surface_faces,
+                inlay_verts,
+                inlay_faces,
+                self.thickness_shell.vertices,
+                self.thickness_shell.faces,
+            )
             if self.configs["isSave"]:
                 open3d.io.write_triangle_mesh(
                     os.path.join(
@@ -255,6 +301,17 @@ class InlayGeneration:
                     ),
                     self.tri2o3d(self.inlay_outer),
                 )
+                self.inner_dilation.export(os.path.join(
+                    self.configs["save_path"], f"15.1_stitched_inlay_inner_{self.tid}.ply"
+                ))
+            # self.inner_dilation.invert()
+            # self.stitch()
+            self.stitch_new()
+            self.thickness_shell = get_thickness_gap2(
+                self.thickness_shell, self.stitched_inlay
+            )
+            # self.get_inner_outer_edge_idx()
+            if self.configs["isSave"]:
                 open3d.io.write_triangle_mesh(
                     os.path.join(
                         self.configs["save_path"],
@@ -262,7 +319,6 @@ class InlayGeneration:
                     ),
                     self.stitched_inlay,
                 )
-                
 
     def run_occlu(self) -> None:
         # registeration =============================================
@@ -276,7 +332,7 @@ class InlayGeneration:
         # self.inlay_outer = mesh_registration.doSubMeshTps(
         #     boundarySet, self.inlay_outer, mesh_registration.lastSubmehs_tps_dis
         # )
-        
+
         if isinstance(self.inlay_outer, trimesh.Trimesh):
             self.inlay_outer = self.tri2o3d(self.inlay_outer)
         if self.configs["isSave"]:
@@ -284,11 +340,12 @@ class InlayGeneration:
                 os.path.join(
                     self.configs["save_path"], f"4_boundary_TPSed_{self.tid}.ply"
                 ),
-                self.inlay_outer                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             ,
+                self.inlay_outer,
             )
         # fill gap ==================================================
         s = time.time()
         self.stitch()
+        # self.stitch_new()
         print("10. stitching time: ", time.time() - s)
 
         if isinstance(self.inlay_outer, trimesh.Trimesh):
@@ -318,18 +375,22 @@ class InlayGeneration:
         inlay_faces = np.array(self.stitched_inlay.triangles).astype(np.int32)
         inlay_outer = copy.deepcopy(self.inlay_outer)
         stitched_inlay = copy.deepcopy(self.stitched_inlay)
-        self.inlay_outer = inlayPostWarp(surface_verts, surface_faces, inlay_verts, inlay_faces)
-            
-        self.stitch()
-        
-        changed_faces = find_changed_faces(
-            self.o3d2tri(inlay_outer), self.inlay_outer
+        self.inlay_outer = inlayPostWarp(
+            surface_verts, surface_faces, inlay_verts, inlay_faces
         )
-        self.thickness_points_id = self.inlay_outer.faces[
-            changed_faces
-        ].reshape(-1)
-        _, self.thickness_points_id = find_new_points(self.stitched_inlay, self.inlay_outer.vertices[self.thickness_points_id])
-        self.stitched_inlay, self.fixed_stitched_inlay = stitched_inlay, self.stitched_inlay
+
+        # self.stitch()
+        self.stitch_new()
+
+        changed_faces = find_changed_faces(self.o3d2tri(inlay_outer), self.inlay_outer)
+        self.thickness_points_id = self.inlay_outer.faces[changed_faces].reshape(-1)
+        _, self.thickness_points_id = find_new_points(
+            self.stitched_inlay, self.inlay_outer.vertices[self.thickness_points_id]
+        )
+        self.stitched_inlay, self.fixed_stitched_inlay = (
+            stitched_inlay,
+            self.stitched_inlay,
+        )
         self.inlay_outer, self.fixed_inlay_outer = inlay_outer, self.inlay_outer
         if self.configs["isSave"]:
             open3d.io.write_triangle_mesh(

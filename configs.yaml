@@ -31,3 +31,5 @@ fixBoundDis: 0.01         # Boundary fix width during adaptation
 insertExport: 0.01        # Collision area spread width
 lastDis: 0.01             # The final collision distance parameters are adjusted <= lastDis
 alph: 0.02                # Iteration step. The smaller, the better effect, but the slower speed, recommended not less than "lastDis"
+# Undercut Settings
+fill_undercut: False

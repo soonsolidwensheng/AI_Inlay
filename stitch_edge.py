@@ -6,7 +6,10 @@ import numpy as np
 import trimesh
 
 from inlay_cpu import InlayGeneration, MeshRegistration
-from utils import compress_drc
+from utils import compress_drc, o3d2tri
+from undercut_util import get_insert_direction_copy
+from directional_undercut_filling import filling_undercut
+
 
 def write_mesh_bytes(mesh, preserve_order=False, colors=None):
     # 设置 Draco 编码选项
@@ -40,15 +43,20 @@ def run(data):
         lower_scan=None,
         adjacent_teeth=None,
         standard=data.get("inlay_outer"),
+        fill_undercut=data.get("fill_undercut", False)
     )
     mesh_registration = MeshRegistration(IG.configs)
+    if mesh_registration.fill_undercut:
+        insert_direction = get_insert_direction_copy(IG.inlay_inner)
+        IG.inlay_inner = filling_undercut(IG.inlay_inner, insert_direction, display=False)[0].as_open3d
     mesh_registration.get_cement_gap(IG.o3d2tri(IG.inlay_inner))
     # boundarySet, _ = mesh_registration.getBoundaryPoints(mesh_registration.inner_dilation.as_open3d)
     # IG.lib_tooth = mesh_registration.doSubMeshTps(boundarySet, IG.lib_tooth, mesh_registration.lastSubmehs_tps_dis)
     IG.inner_dilation = mesh_registration.inner_dilation
     IG.inlay_outer = IG.lib_tooth
-    IG.stitch()
-    IG.get_inner_outer_edge_idx()
+    # IG.stitch()
+    # IG.get_inner_outer_edge_idx()
+    IG.stitch_new()
 
     return (
         IG.o3d2tri(IG.get_stitched_inlay()),
@@ -75,7 +83,30 @@ def handler(event, context):
         data_input = {}
         data_input["inner_dilation"] = read_mesh_bytes(event.get("inner_dilation"))
         data_input["inlay_outer"] = read_mesh_bytes(event.get("inlay_outer"))
+        if event.get("multi_restoration"):
+            event["rot_matrix"] = event["rot_matrix"][0]
+            event["rot_matrix"][0][-1][-1] = 1
+            event["rot_matrix"][1][-1][-1] = 1
+            data_input["inner_dilation"] = o3d2tri(data_input["inner_dilation"])
+            data_input["inner_dilation"].apply_transform(event["rot_matrix"][0])
+            data_input["inner_dilation"].apply_transform(event["rot_matrix"][1])
+            data_input["inner_dilation"] = data_input["inner_dilation"].as_open3d
+
+            data_input["inlay_outer"] = o3d2tri(data_input["inlay_outer"])
+            data_input["inlay_outer"].apply_transform(event["rot_matrix"][0])
+            data_input["inlay_outer"].apply_transform(event["rot_matrix"][1])
+            data_input["inlay_outer"] = data_input["inlay_outer"].as_open3d
+
+            data_input["fill_undercut"] = event.get("fill_undercut", False)
+
         stitch_out = run(data_input)
+
+        if event.get("multi_restoration"):
+            stitch_out[0].apply_transform(np.linalg.pinv(event["rot_matrix"][1]))
+            stitch_out[0].apply_transform(np.linalg.pinv(event["rot_matrix"][0]))
+
+            stitch_out[1].apply_transform(np.linalg.pinv(event["rot_matrix"][1]))
+            stitch_out[1].apply_transform(np.linalg.pinv(event["rot_matrix"][0]))
 
         stitch_json = {
             "crown": compress_drc(stitch_out[0], [stitch_out[2], stitch_out[3], stitch_out[4]]),
