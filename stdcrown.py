@@ -7,7 +7,7 @@ import numpy as np
 import trimesh
 from scipy.spatial import transform
 from pre_op_mirror import pre_op, mirror_crown
-
+from utils import get_biggest_mesh
 
 def write_mesh_bytes(mesh, preserve_order=False, colors=None):
     # 设置 Draco 编码选项
@@ -49,32 +49,19 @@ def run(data):
         return post_op_crown
     elif data["preop_or_mirror"] == "mirror":
         m_crown = mirror_crown.mirror_crown(data["all_other_crown"], data["beiya_id"], data["rot_matrix"], np.eye(4), std_crown, data["mirror_id"])
+        if data["test"]:
+            save_path = data["save_path"]
+            m_crown.export(f"{save_path}/stdcrown_mirror_{data['beiya_id']}.stl")
         return m_crown
 
-# def run(data):
-#     with open("config/st_tooth_remesh/config.json", "r") as f:
-#         tooth_lib_configs = json.load(f)[str(data["beiya_id"])]
-#     ori_mesh = trimesh.load(tooth_lib_configs["st_path"])
-#     ori_mesh.apply_translation(-ori_mesh.centroid)
-#     points_bottom = tooth_lib_configs["cross_points"][1]
-#     points_top = tooth_lib_configs["cross_points"][0]
-#     points_front = tooth_lib_configs["cross_points"][2]
-#     points_back = tooth_lib_configs["cross_points"][3]
+def remesh(mesh):
+    import pymeshlab
+    ms_mesh = pymeshlab.Mesh(mesh.vertices, mesh.faces)
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(ms_mesh)
+    ms.meshing_isotropic_explicit_remeshing()
 
-#     v_occl = ori_mesh.vertices[points_top] - ori_mesh.vertices[points_bottom]
-#     v_misial = ori_mesh.vertices[points_front] - ori_mesh.vertices[points_back]
-#     frameA = np.array([v_occl, v_misial])
-#     frameB = np.array([[0, 1, 0], [1, 0, 0]])
-#     weights = np.array([0.5, 0.5])
-#     rot_mat, root_sum_squared_distance = transform.Rotation.align_vectors(
-#         frameA, frameB, weights=weights
-#     )
-#     rot_matrix = np.eye(4)  # 创建一个单位矩阵作为变换矩阵的初始值
-#     rot_matrix[:3, :3] = rot_mat.as_matrix()  # 复制旋转矩阵的前三列到变换矩阵的前三列
-#     rot_matrix[:, 3] = [0, 0, 0, 1]
-#     ori_mesh.apply_transform(np.linalg.pinv(rot_matrix))
-
-#     return ori_mesh
+    return trimesh.Trimesh(ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix())
 
 
 def handler(event, context):
@@ -97,13 +84,21 @@ def handler(event, context):
         data_input["preop_matrix"] = event.get("preop_matrix", np.eye(4))
         # data_input["pre_op_teeth"] = event.get("pre_op_teeth")
         data_input["mirror_id"] = event.get("mirror_id")
-        data_input["all_other_crown"] = list(event.get("all_other_crown").values())[0].get('teeth_crowns')
+        if data_input["beiya_id"][0] in ["1", "2"]:
+            data_input["all_other_crown"] = event.get("all_other_crown")["upper_arch"].get('teeth_crowns')
+        else:
+            data_input["all_other_crown"] = event.get("all_other_crown")["lower_arch"].get('teeth_crowns')
         data_input["rot_matrix"] = event["rot_matrix"][0]
         data_input["rot_matrix"][0][-1][-1] = 1
         data_input["rot_matrix"][1][-1][-1] = 1
         data_input["rot_matrix"].append(np.eye(4).tolist())
+        data_input["test"] = event.get("test", False)
+        data_input["save_path"] = event.get("save_path", "")
 
         std_out = run(data_input)
+
+        std_out = remesh(std_out)
+        std_out = get_biggest_mesh(std_out)
 
         std_json = {
             "stdcrown": write_mesh_bytes(std_out),
@@ -121,17 +116,19 @@ def handler(event, context):
 
 
 if __name__ == "__main__":
-    with open("test_data/c1/output_gpu.json", "r") as f:
-        data_gpu = json.load(f)
-    with open("test_data/c1/output.json", "r") as f:
+    # with open("test_data/c1/inlay_standard_lambda.json", "r") as f:
+    #     data_gpu = json.load(f)
+    with open("test_data/c1/inlay_standard_lambda.json", "r") as f:
         data = json.load(f)
     
-    event = {
-        "beiya_id": 45,
-        "preop_or_mirror": "mirror",
-        "std_crown": data["stdcrown"],
-        "mirror_id": "34",
-        "all_other_crown": data_gpu["all_teeth_seg"],
-        "rot_matrix": data_gpu["inlay_res"]["45"]["rot_matrix"]
-    }
-    print(handler(event, None))
+    # event = {
+    #     "beiya_id": 45,
+    #     "preop_or_mirror": "mirror",
+    #     "std_crown": data["stdcrown"],
+    #     "mirror_id": "34",
+    #     "all_other_crown": data_gpu["all_teeth_seg"],
+    #     "rot_matrix": data_gpu["inlay_res"]["45"]["rot_matrix"]
+    # }
+    data["test"] = True
+    data["save_path"] = "test_data/c1"
+    handler(data, None)

@@ -1199,11 +1199,18 @@ class MeshRegistration:
 
         inflated_inlay_outer = trimesh.Trimesh(verts, faces)
         return inflated_inlay_outer
-
+    
+    
+    
     def run(self, mesh_source, mesh_target, mesh_q, anta_scan):
         mesh = self.o3d2tri(mesh_source)
         pcd_source = o3d.geometry.PointCloud()
         pcd_source.points = mesh_source.vertices
+        if self.isSave:
+            o3d.io.write_triangle_mesh(
+                os.path.join(self.save_path, f"1_b_{self.teeth_num}.ply"),
+                mesh_target,
+            )
 
         # register & tps==============================================================
         t1 = time.time()
@@ -1223,6 +1230,7 @@ class MeshRegistration:
                 os.path.join(self.save_path, f"0_lib_tooth_{self.teeth_num}.ply"),
                 mesh_source,
             )
+            
             o3d.io.write_triangle_mesh(
                 os.path.join(self.save_path, f"1_q_{self.teeth_num}.ply"),
                 mesh_q,

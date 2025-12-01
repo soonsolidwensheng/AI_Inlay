@@ -95,12 +95,12 @@ def adjust_crown_position(crown, other_teeth):
         dist = trimesh.base.proximity.closest_point(
             crown_copy, random.sample(tooth.vertices.tolist(), 100)
         )[1]
-        if min(dist) < 0.5:  # 如果距离小于0.5mm，认为是邻牙
+        if min(dist) < 1:  # 如果距离小于0.5mm，认为是邻牙
             adjacent_teeth.append(tooth)
     if len(adjacent_teeth) == 0:
         return crown  # 没有邻牙，直接返回
     elif len(adjacent_teeth) == 1:
-        if adjacent_teeth[0].bounding_box.extents[0] > crown.bounding_box.extents[0]:
+        if adjacent_teeth[0].bounds[0][0] > crown.bounds[0][0]:
             c.add_object("mesh1", adjacent_teeth[0])
         else:
             c.add_object("mesh2", adjacent_teeth[0])
@@ -136,8 +136,8 @@ def adjust_crown_position(crown, other_teeth):
                     return crown
     elif len(adjacent_teeth) == 2:
         if (
-            adjacent_teeth[0].bounding_box.extents[0]
-            > adjacent_teeth[1].bounding_box.extents[0]
+            adjacent_teeth[0].bounds[0][0]
+            > adjacent_teeth[1].bounds[0][0]
         ):
             c.add_object("mesh1", adjacent_teeth[0])
             c.add_object("mesh2", adjacent_teeth[1])
@@ -370,6 +370,8 @@ def adjust_crown_position(crown, other_teeth):
                                 )
                             )
                             return crown
+        else:
+            return crown  # 无碰撞，直接返回
     else:
         return crown  # 邻牙超过2个，暂不处理，直接返回
 
@@ -382,18 +384,18 @@ def mirror_crown(
 
     control_points = trimesh.PointCloud(control_points)
     control_points.apply_transform(np.linalg.pinv(T))
-    control_points.apply_transform(
-        np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1])
-    )
-    control_points.apply_transform(np.array(crown_rot_matirx[2]))
-    control_points.apply_transform(ai_matrix)
+    # control_points.apply_transform(
+    #     np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1])
+    # )
+    # control_points.apply_transform(np.array(crown_rot_matirx[2]))
+    # control_points.apply_transform(ai_matrix)
 
     bio_crown = read_mesh_bytes(all_other_crowns[mirror_id])
-    bio_crown.apply_transform(
-        np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1])
-    )
-    bio_crown.apply_transform(np.array(crown_rot_matirx[2]))
-    bio_crown.apply_transform(ai_matrix)
+    # bio_crown.apply_transform(
+    #     np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1])
+    # )
+    # bio_crown.apply_transform(np.array(crown_rot_matirx[2]))
+    # bio_crown.apply_transform(ai_matrix)
 
     n, d = get_mirror_plane(control_points[:50], control_points[50:][::-1])
 
@@ -417,15 +419,19 @@ def mirror_crown(
     other_teeth = [
         read_mesh_bytes(v) for k, v in all_other_crowns.items() if k != beiya_id
     ]
-    bio_crown_mirror.apply_transform(
-        np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1])
-    )
+    bio_crown_mirror.apply_transform(np.array(crown_rot_matirx[0]))
+    bio_crown_mirror.apply_transform(np.array(crown_rot_matirx[1]))
     bio_crown_mirror.apply_transform(np.array(crown_rot_matirx[2]))
     bio_crown_mirror.apply_transform(ai_matrix)
     for m in other_teeth:
-        m.apply_transform(np.array(crown_rot_matirx[0]) @ np.array(crown_rot_matirx[1]))
+        m.apply_transform(np.array(crown_rot_matirx[0]))
+        m.apply_transform(np.array(crown_rot_matirx[1]))
         m.apply_transform(np.array(crown_rot_matirx[2]))
         m.apply_transform(ai_matrix)
     bio_crown_mirror = adjust_crown_position(bio_crown_mirror, other_teeth)
+    bio_crown_mirror.apply_transform(np.linalg.pinv(ai_matrix))
+    bio_crown_mirror.apply_transform(np.linalg.pinv(np.array(crown_rot_matirx[2])))
+    bio_crown_mirror.apply_transform(np.linalg.pinv(np.array(crown_rot_matirx[1])))
+    bio_crown_mirror.apply_transform(np.linalg.pinv(np.array(crown_rot_matirx[0])))
 
     return bio_crown_mirror

@@ -870,7 +870,7 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
                     new_faces.append([p1, p0, b_0_0])
                 else:
                     new_faces.append([p1, p0, b_0_1])
-            elif i_0 == np.max(dist_index):
+            elif i_0 == np.max(edge_after):
                 new_faces.append([p1, p0, b_0_0])
             else:
                 new_faces.append([p1, p0, b_0_1])
@@ -1069,7 +1069,7 @@ if "__main__" == __name__:
     import traceback
     import pylfda
 
-    mesh_out = trimesh.load('test_data/muti_inlay/prod/20250916-inlay_onlay/AAAU-VPPH/result_undercut1/15_stitch_fixed_inlay_outer_36.ply')
-    mesh_inner = trimesh.load('test_data/muti_inlay/prod/20250916-inlay_onlay/AAAU-VPPH/result_undercut1/15.1_stitched_inlay_inner_36.ply')
+    mesh_out = trimesh.load('test_data/c2/15_stitch_fixed_inlay_outer_47.ply')
+    mesh_inner = trimesh.load('test_data/c2/15.1_stitched_inlay_inner_47.ply')
     out = stitch_edge(mesh_out, mesh_inner)[0]
-    out.export('test_data/muti_inlay/prod/20250916-inlay_onlay/AAAU-VPPH/result_undercut1/out.stl') 
+    out.export('test_data/c2/out.stl') 

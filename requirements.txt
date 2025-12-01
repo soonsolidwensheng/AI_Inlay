@@ -7,3 +7,5 @@ bpy==4.2.0
 networkx==3.4.2
 rtree==1.4.0
 geomdl==5.4.0
+python-fcl==0.7.0.6
+pymeshlab==2023.12.post2

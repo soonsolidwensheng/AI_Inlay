@@ -3,6 +3,7 @@ import numpy as np
 import open3d as o3d
 from scipy.spatial.distance import cdist
 import trimesh
+from scipy import stats
 
 def read_mesh(path: str) -> o3d.geometry.TriangleMesh:
     """Return a o3d.geometry.TriangleMesh object from a file path"""
@@ -22,6 +23,71 @@ def getBoundaryPoints(mesh):
     boundary_point_id = np.unique(edges.flatten())
     boundary_point = mesh.vertices[boundary_point_id]
     return boundary_point, boundary_point_id
+
+
+def robust_outlier_detection(data, target_index=0, alpha=0.05):
+    """稳健的离群点检测"""
+    
+    # 1. F检验
+    var_full = np.var(data, ddof=1)
+    data_without = np.delete(data, target_index)
+    var_without = np.var(data_without, ddof=1)
+    
+    F_stat = max(var_full/var_without, var_without/var_full)
+    df1, df2 = len(data)-1, len(data_without)-1
+    p_value = 2 * min(stats.f.cdf(F_stat, df1, df2), 
+                      1 - stats.f.cdf(F_stat, df1, df2))
+    
+    # 2. 方差变化比例
+    variance_change_ratio = (var_full - var_without) / var_full * 100
+    
+    # 3. Z-score
+    z_score = abs(data[target_index] - np.mean(data)) / np.std(data, ddof=1)
+    
+    print("=== 综合离群点检测 ===")
+    print(f"F检验 p值: {p_value:.6f}")
+    print(f"方差变化: {variance_change_ratio:.2f}%")
+    print(f"Z-score: {z_score:.3f}")
+    
+    # 综合判断
+    if p_value < alpha and variance_change_ratio > 5 and z_score > 2:
+        print("🔴 结论: 很可能是离群点")
+        return True
+    elif (p_value < alpha) or (variance_change_ratio > 10) or (z_score > 2.5):
+        print("🟡 结论: 可能是离群点")
+        return True
+    else:
+        print("🟢 结论: 不太可能是离群点")
+        return False
+
+def angle_with_y_axis(vectors):
+    """
+    计算每个向量与 [0, 1, 0] (Y轴正方向) 的夹角
+    
+    参数:
+    vectors: numpy数组, 形状为 (n, 3) 的向量集合
+    
+    返回:
+    angles: numpy数组, 形状为 (n,) 的夹角(角度制)
+    """
+    # 参考向量 [0, 1, 0]
+    reference = np.array([0, 1, 0])
+    
+    # 计算点积: 由于参考向量是[0,1,0]，点积就是每个向量的y分量
+    dot_products = vectors[:, 1]  # 直接取y分量
+    
+    # 计算向量的模长
+    norms = np.linalg.norm(vectors, axis=1)
+    
+    # 计算夹角余弦值，确保在[-1, 1]范围内
+    cos_angles = dot_products / norms
+    cos_angles = np.clip(cos_angles, -1.0, 1.0)
+    
+    # 计算夹角(弧度)并转换为角度
+    angles_rad = np.arccos(cos_angles)
+    angles_deg = np.degrees(angles_rad)
+    
+    return angles_deg
 
 def get_insert_direction(prep_mesh: o3d.geometry.TriangleMesh, vis=False) -> np.ndarray:
     """Visulize the computed minimum-undercut direction of a prep tooth"""
@@ -267,12 +333,25 @@ def get_insert_direction_copy(
     print(f"loop time: {s2 - s1}")
     min_indices_num = np.argsort(out_undercut_num)[: int(points.shape[0] / 4)]
     out_directions = points[min_indices_num]
-    out_direction = np.mean(points[min_indices_num], axis=0)[np.newaxis, ...]
+    angles = angle_with_y_axis(out_directions)
+    for i in range(len(angles)):
+        if robust_outlier_detection(angles, i):
+            print(f"remove outlier direction: {out_directions[i]}")
+            out_directions[i] = out_directions.mean(axis=0)
+        else:
+            out_direction = out_directions[i][np.newaxis, ...]
+            break
+
+    # out_direction_ = np.mean(points[min_indices_num], axis=0)[np.newaxis, ...]
+    # angle = abs(angle_with_y_axis(out_direction_) - angle_with_y_axis(out_direction))
+    # print(angle)
+    # out_direction = out_directions[0][np.newaxis, ...]
     # out_direction = points[np.argsort(out_undercut_num)[2]]
 
     if out_direction[0][1] > 0:
         out_direction[0] *= -1.0
     return out_direction[0]
+    # return out_direction[0], angle
     # if out_direction[1] > 0:
     #     out_direction *= -1.0
     # return out_direction
