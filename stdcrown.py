@@ -1,23 +1,17 @@
 import base64
 import json
 import traceback
+
 import DracoPy
-import MQCompressPy
 import numpy as np
+import requests
 import trimesh
+from scipy.spatial import transform
+from pre_op_mirror import pre_op, mirror_crown
+from utils import get_biggest_mesh, transform_method_
+from scipy.spatial.distance import cdist
 
-from crown_cpu import stdcrown
-
-
-def read_mesh_bytes(buffer):
-    a = base64.b64decode(buffer)
-    mesh_object = DracoPy.decode_buffer_to_mesh(a)
-    V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
-    F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
-    return trimesh.Trimesh(V, F)
-
-
-def write_mesh_bytes(mesh, colors=None, preserve_order=False):
+def write_mesh_bytes(mesh, preserve_order=False, colors=None):
     # 设置 Draco 编码选项
     encoding_test = DracoPy.encode_mesh_to_buffer(
         mesh.vertices,
@@ -32,286 +26,189 @@ def write_mesh_bytes(mesh, colors=None, preserve_order=False):
     return b64_str
 
 
-def write_drc(drc, file):
-    with open(file, "wb") as test_file:
-        test_file.write(base64.b64decode(drc))
+def read_mesh_bytes(buffer):
+    a = base64.b64decode(buffer)
+    mesh_object = DracoPy.decode_buffer_to_mesh(a)
+    V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
+    F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
+    return trimesh.Trimesh(V, F)
+
+def getBoundaryPoints(mesh):
+    """get the boundary points of a mesh IN THE ORDER of how they appear in the mesh"""
+    unique_elements, counts = np.unique(mesh.edges_sorted, return_counts=True, axis=0)
+    edges = unique_elements[np.where(counts == 1)[0]]
+    boundary_point_id = np.unique(edges.flatten())
+    boundary_point = mesh.vertices[boundary_point_id]
+    return boundary_point, boundary_point_id
 
 
-def compress_drc(mesh, points_id=[]):
-    vert_flags = np.zeros(len(mesh.vertices), dtype=np.uint8)
-    vert_flags[points_id] = 1
-    # trimesh.PointCloud(mesh.vertices[points_id]).export('p.ply')
-    in_mesh = MQCompressPy.MQC_Mesh()
-    in_mesh.verts = MQCompressPy.VerticeArray(mesh.vertices)
-    in_mesh.faces = MQCompressPy.FaceArray(mesh.faces)
-    in_vert_flags = MQCompressPy.VerticeFlag_UINT8(
-        np.array(vert_flags).astype(np.uint8)
+
+def run(data):
+    std_crown = read_mesh_bytes(data["std_crown"])
+    
+    if data["preop_or_mirror"] == "preop":
+        pre_op_crown = read_mesh_bytes(data["pre_op_crown"])
+        preop_matrix = data["preop_matrix"]
+        # pre_op_teeth = read_mesh_bytes(data["pre_op_teeth"])
+        # post_op_teeth = read_mesh_bytes(data["post_op_teeth"])
+
+        pre_op_crown.apply_transform(preop_matrix)
+        b_p, _ = getBoundaryPoints(pre_op_crown)
+        post_op_crown = pre_op.std_morphing(std_crown, pre_op_crown)
+        dist = cdist(b_p, post_op_crown.vertices)
+        b_p_id = np.unique(np.where(dist < 1)[1]).tolist()
+        post_op_crown = trimesh.smoothing.filter_laplacian(post_op_crown, laplacian_operator=trimesh.smoothing.laplacian_calculation(post_op_crown, pinned_vertices=np.setdiff1d(np.arange(post_op_crown.vertices.shape[0]), b_p_id)))
+        
+        return post_op_crown
+    elif data["preop_or_mirror"] == "mirror":
+        # m_crown = mirror_crown.mirror_crown(data["all_other_crown"], data["beiya_id"], data["rot_matrix"], np.eye(4), std_crown, data["mirror_id"])
+        _, mirror_matrix = transform_method_(read_mesh_bytes(data['arch_seg_crowns'][data['mirror_id']]),
+                data['arch_seg_crowns'],
+                data['mirror_id'],
+                0,
+                None,
+                None,)
+        m_crown = mirror_crown.mirror_crown_(
+            data['arch_seg_crowns'],
+            data['all_other_crown'],
+            data['beiya_id'],
+            mirror_matrix,
+            data['rot_matrix'],
+            np.eye(4),
+            std_crown.copy(),
+            data['mirror_id'],
+            data['prep_tid'],
+        )
+        if data["test"]:
+            save_path = data["save_path"]
+            m_crown.export(f"{save_path}/stdcrown_mirror_{data['beiya_id']}.stl")
+        return m_crown
+
+def remesh(mesh):
+    import pymeshlab
+    ms_mesh = pymeshlab.Mesh(mesh.vertices, mesh.faces)
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(ms_mesh)
+    ms.meshing_isotropic_explicit_remeshing(targetlen=pymeshlab.PureValue(0.15), featuredeg=10, )
+
+    return trimesh.Trimesh(ms.mesh(0).vertex_matrix(), ms.mesh(0).face_matrix())
+
+
+def load_input_info(event, requests_module=None):
+    requests_module = requests if requests_module is None else requests_module
+    if event.get("source_url"):
+        return requests_module.get(event["source_url"]).json()
+    return event
+
+
+def upload_result(target_url, data, requests_module=None):
+    requests_module = requests if requests_module is None else requests_module
+    response = requests_module.put(
+        target_url,
+        json=data,
+        headers={"Content-Type": "binary/octet-stream"},
     )
-    compressed_data, error_code = MQCompressPy.compressMesh_UINT8(
-        in_mesh, in_vert_flags
-    )
-    # with open('mesh.drc', 'wb') as f:
-    #     f.write(compressed_data)
-    if error_code == 0:
-        b64_bytes = base64.b64encode(compressed_data)
-        b64_str = b64_bytes.decode("utf-8")
-        return b64_str
+    response.raise_for_status()
+    return response
+
+
+def normalize_input(input_info):
+    return input_info
+
+
+def success_response(data):
+    return {"Msg": {"data": data}, "Code": 200, "State": "Success"}
+
+
+def log_request_info(input_info):
+    if input_info.get("job_id"):
+        print(f"job_id: {input_info.get('job_id')}")
     else:
-        assert "drc compress error"
+        print("job_id: None")
+    if input_info.get("execution_id"):
+        print(f"execution_id: {input_info.get('execution_id')}")
+    else:
+        print("execution_id: None")
 
 
-def matrix2matrix(crown_rot_matirx):
-    ai_matrix = np.eye(4)  # 创建一个单位矩阵作为变换矩阵的初始值
-    ai_matrix[:3, :3] = crown_rot_matirx  # 复制旋转矩阵的前三列到变换矩阵的前三列
-    ai_matrix[:, 3] = [0, 0, 0, 1]
-    return ai_matrix
+def run_pipeline(input_info):
+    data_input = {}
+    data_input["beiya_id"] = input_info.get("beiya_id")
+    data_input["preop_or_mirror"] = input_info.get("preop_or_mirror")
+    data_input["std_crown"] = input_info.get("std_crown")
+    data_input["pre_op_crown"] = input_info.get("pre_op_crown")
+    # data_input["pre_op_teeth"] = input_info.get("pre_op_teeth")
+    data_input["mirror_id"] = input_info.get("mirror_id")
+    if data_input["preop_or_mirror"] == "mirror":
+        arch_seg_crowns = {}
+        if data_input["beiya_id"][0] in ["1", "2"]:
+            data_input["all_other_crown"] = input_info.get("all_other_crown")["upper_arch"].get("teeth_crowns")
+        else:
+            data_input["all_other_crown"] = input_info.get("all_other_crown")["lower_arch"].get("teeth_crowns")
+        if data_input["mirror_id"][0] in ["1", "2"]:
+            for k, v in input_info.get("all_other_crown")["upper_arch"].items():
+                arch_seg_crowns = {**arch_seg_crowns, **v}
+        else:
+            for k, v in input_info.get("all_other_crown")["lower_arch"].items():
+                arch_seg_crowns = {**arch_seg_crowns, **v}
+        data_input["arch_seg_crowns"] = arch_seg_crowns
+        data_input["prep_tid"] = input_info.get("prep_tid")
+        data_input["rot_matrix"] = input_info["rot_matrix"][0]
+        data_input["rot_matrix"][0][-1][-1] = 1
+        data_input["rot_matrix"][1][-1][-1] = 1
+        data_input["rot_matrix"].append(np.eye(4).tolist())
+    else:
+        if data_input["beiya_id"][0] in ["1", "2"]:
+            data_input["preop_matrix"] = input_info.get("preop_to_postop").get("upper_matrix", np.eye(4))
+        else:
+            data_input["preop_matrix"] = input_info.get("preop_to_postop").get("lower_matrix", np.eye(4))
+    data_input["test"] = input_info.get("test", False)
+    data_input["save_path"] = input_info.get("save_path", "")
 
-def file_name2template_name(file_name):
-    s = file_name.split('_')[0]
-    f2t = {
-        'CSv1': 'Cyber Standard v1',
-        'GSv1': 'Generic Standard v1',
-        'Mv1': 'Mature v1',
-        'rev1': 'st_tooth',
-        'SSv1': 'Soft Standard v1',
-        'Yv1': 'Youth v1'
-        }
-    return f2t[s]
+    std_out = run(data_input)
+    std_out = remesh(std_out)
+    std_out = get_biggest_mesh(std_out)
+    print("suncess stitch_edge")
+    return {"stdcrown": write_mesh_bytes(std_out)}
 
-def handler(event, context):
+
+def handler(event, context=None, requests_module=None):
+    requests_module = requests if requests_module is None else requests_module
+    input_info = event
     print("receive case")
     try:
-        input_info = event
-        try:
-            input_info["ai_matrix"] = matrix2matrix(input_info["crown_rot_matirx"])
-            new_transform = input_info["new_transform_list"]
-            mesh_beiya = input_info["mesh_beiya"]
-            mesh_beiya = read_mesh_bytes(mesh_beiya)
-            mesh_beiya.apply_transform(np.linalg.pinv(input_info["ai_matrix"]))
-            mesh_beiya.apply_transform(np.linalg.pinv(new_transform[2]))
-            mesh_beiya.apply_transform(np.linalg.pinv(new_transform[0]))
-            mesh_beiya.apply_transform(np.linalg.pinv(new_transform[1]))
-            mesh_beiya = write_mesh_bytes(mesh_beiya)
-            input_info["mesh_beiya"] = mesh_beiya
-            mesh_upper = input_info["mesh_upper"]
-            mesh_upper = read_mesh_bytes(mesh_upper)
-            mesh_upper.apply_transform(np.linalg.pinv(input_info["ai_matrix"]))
-            mesh_upper.apply_transform(np.linalg.pinv(new_transform[2]))
-            mesh_upper.apply_transform(np.linalg.pinv(new_transform[0]))
-            mesh_upper.apply_transform(np.linalg.pinv(new_transform[1]))
-            mesh_upper = write_mesh_bytes(mesh_upper)
-            input_info["mesh_upper"] = mesh_upper
-            mesh_lower = input_info["mesh_lower"]
-            mesh_lower = read_mesh_bytes(mesh_lower)
-            mesh_lower.apply_transform(np.linalg.pinv(input_info["ai_matrix"]))
-            mesh_lower.apply_transform(np.linalg.pinv(new_transform[2]))
-            mesh_lower.apply_transform(np.linalg.pinv(new_transform[0]))
-            mesh_lower.apply_transform(np.linalg.pinv(new_transform[1]))
-            mesh_lower = write_mesh_bytes(mesh_lower)
-            input_info["mesh_lower"] = mesh_lower
-            mesh1 = input_info["mesh1"]
-            mesh1 = read_mesh_bytes(mesh1)
-            mesh1.apply_transform(np.linalg.pinv(input_info["ai_matrix"]))
-            mesh1.apply_transform(np.linalg.pinv(new_transform[2]))
-            mesh1.apply_transform(np.linalg.pinv(new_transform[0]))
-            mesh1.apply_transform(np.linalg.pinv(new_transform[1]))
-            mesh1 = write_mesh_bytes(mesh1)
-            input_info["mesh1"] = mesh1
-            mesh2 = input_info["mesh2"]
-            mesh2 = read_mesh_bytes(mesh2)
-            mesh2.apply_transform(np.linalg.pinv(input_info["ai_matrix"]))
-            mesh2.apply_transform(np.linalg.pinv(new_transform[2]))
-            mesh2.apply_transform(np.linalg.pinv(new_transform[0]))
-            mesh2.apply_transform(np.linalg.pinv(new_transform[1]))
-            mesh2 = write_mesh_bytes(mesh2)
-            input_info["mesh2"] = mesh2
-        except Exception:
-            pass
-        print("pred_filestem_name", input_info.get("pred_filestem_name"))
-        if input_info.get("pred_filestem_name"):
-            input_info["template_name"] = file_name2template_name(input_info.get("pred_filestem_name"))
-        print("template_name", input_info.get("template_name"))
-        print("job_id", input_info.get("job_id"))
-        print("start AI_Crown_CPU_Std ..")
-        std_out = stdcrown(input_info)
-        cpu_points_info = {}
-        cpu_colors_info = {}
-        colors = np.zeros_like(std_out.mesh.vertices, dtype=np.uint8)
-        points_keys = [
-            x for x in vars(std_out.mesh) if x not in vars(trimesh.Trimesh())
-        ][2:]
-        color_n = 0
-        for key in points_keys:
-            points = getattr(std_out.mesh, key, None)
-            if points:
-                color_list = []
-                for p_n, p_idx in enumerate(points.idx):
-                    color_r, color_g, color_b = colors[p_idx]
-                    color_str = (
-                        bin(color_r)[2:].zfill(8)
-                        + bin(color_g)[2:].zfill(8)
-                        + bin(color_b)[2:].zfill(8)
-                    )
-                    color_str = color_str[:color_n] + "1" + color_str[color_n + 1 :]
-                    if key in [
-                        "ad_points",
-                    ]:
-                        color_str = color_str[:-8] + bin(p_n)[2:].zfill(4) + color_str[-4:]
-                    if key in [
-                        "cross_points",
-                    ]:
-                        color_str = color_str[:-4] + bin(p_n)[2:].zfill(4)
-                    color_r = int(color_str[:8], 2)
-                    color_g = int(color_str[8:16], 2)
-                    color_b = int(color_str[16:], 2)
-                    colors[p_idx] = [color_r, color_g, color_b]
-                    if [color_r, color_g, color_b] not in color_list:
-                        color_list.append([color_r, color_g, color_b])
-                cpu_colors_info[key] = color_list
-                color_n += 1
-
-                cpu_points_info[key] = points.pt.tolist()
-                # cpu_points_info[key] = points.idx.tolist()
-        cpu_points_info_backup = {}
-        cpu_colors_info_backup = {}
-        colors_backup = np.zeros_like(std_out.mesh_backup.vertices, dtype=np.uint8)
-        points_keys = [
-            x for x in vars(std_out.mesh) if x not in vars(trimesh.Trimesh())
-        ][2:]
-        # color = 100
-        color_n = 0
-        for key in points_keys:
-            points = getattr(std_out.mesh, key, None)
-            if points:
-                color_list = []
-                for p_n, p_idx in enumerate(points.idx):
-                    color_r, color_g, color_b = colors_backup[p_idx]
-                    color_str = (
-                        bin(color_r)[2:].zfill(8)
-                        + bin(color_g)[2:].zfill(8)
-                        + bin(color_b)[2:].zfill(8)
-                    )
-                    color_str = color_str[:color_n] + "1" + color_str[color_n + 1 :]
-                    if key in [
-                        "ad_points",
-                    ]:
-                        color_str = color_str[:-8] + bin(p_n)[2:].zfill(4) + color_str[-4:]
-                    if key in [
-                        "cross_points",
-                    ]:
-                        color_str = color_str[:-4] + bin(p_n)[2:].zfill(4)
-                    color_r = int(color_str[:8], 2)
-                    color_g = int(color_str[8:16], 2)
-                    color_b = int(color_str[16:], 2)
-                    colors_backup[p_idx] = [color_r, color_g, color_b]
-                    if [color_r, color_g, color_b] not in color_list:
-                        color_list.append([color_r, color_g, color_b])
-                cpu_colors_info_backup[key] = color_list
-                color_n += 1
-
-                cpu_points_info_backup[key] = points.pt.tolist()
-                # cpu_points_info_backup[key] = points.idx.tolist()
-        points_oppo_id = std_out.points_oppo_id
-        # points_drc_id = list(range(len(std_out.mesh.vertices)))
-        # standard = compress_drc(std_out.mesh, points_drc_id)
-        # mesh_backup = compress_drc(std_out.mesh_backup, points_drc_id)
-        standard = write_mesh_bytes(std_out.mesh, colors)
-        mesh_backup = write_mesh_bytes(std_out.mesh_backup, colors_backup)
-        closer = write_mesh_bytes(std_out.mesh1)
-        further = write_mesh_bytes(std_out.mesh2)
-        mesh_beiya = write_mesh_bytes(std_out.mesh_beiya)
-        mesh_upper = write_mesh_bytes(std_out.mesh_upper)
-        mesh_lower = write_mesh_bytes(std_out.mesh_lower)
-        mesh_jaw = write_mesh_bytes(std_out.mesh_jaw)
-        mesh_oppo = write_mesh_bytes(std_out.mesh_oppo)
-        template_name = std_out.template_name
-        # std_out.mesh_lower.export(os.path.join(context, 'lower.stl'))
-        # std_out.mesh_upper.export(os.path.join(context, 'upper.stl'))
-        # std_out.mesh.export(os.path.join(context, 'standard.stl'))
-        # std_out.mesh_lower.export('lower.stl')
-        # std_out.mesh_upper.export('upper.stl')
-        # std_out.mesh.export('standard1.stl')
-
-        cpu_std_json = {
-            "closer": closer,
-            "further": further,
-            "mesh_upper": mesh_upper,
-            "mesh_lower": mesh_lower,
-            "mesh_jaw": mesh_jaw,
-            "mesh_oppo": mesh_oppo,
-            "beiya_id": std_out.miss_id,
-            "is_single": std_out.is_single,
-            "standard": standard,
-            "template_name": template_name,
-            "cpu_points_info": cpu_points_info,
-            "cpu_colors_info": cpu_colors_info,
-            "points_oppo_id": points_oppo_id,
-        }
-        cpu_std_json_backup = {
-            "closer": closer,
-            "further": further,
-            "mesh_upper": mesh_upper,
-            "mesh_lower": mesh_lower,
-            "mesh_jaw": mesh_jaw,
-            "mesh_oppo": mesh_oppo,
-            "beiya_id": std_out.miss_id,
-            "is_single": std_out.is_single,
-            "standard": mesh_backup,
-            "template_name": template_name,
-            "cpu_points_info": cpu_points_info_backup,
-            "cpu_colors_info_backup": cpu_colors_info_backup,
-            "points_oppo_id": points_oppo_id,
-        }
-        std_json = {
-            "cpu_std_json": cpu_std_json,
-            # "cpu_std_json_backup": cpu_std_json_backup,
-            "standard": standard,
-            "inner": mesh_beiya,
-            "standard_backup": mesh_backup,
-        }
-
-        print("suncess stdcrown")
-
-        # 本地rie测试保存结果
-        # with open('std0828.json', "w") as f:
-        #     f.write(json.dumps(std_json))
-
-        return {"Msg": {"data": std_json}, "Code": 200, "State": "Success"}
+        print("start AI_Inlay_CPU_Std ..")
+        input_info = load_input_info(event, requests_module)
+        input_info = normalize_input(input_info)
+        log_request_info(input_info)
+        std_json = run_pipeline(input_info)
+        if event.get("target_url"):
+            upload_result(event["target_url"], std_json, requests_module)
+            return success_response("result saved to target url")
+        return success_response(std_json)
     except Exception as _:
-        res = {"Msg": traceback.format_exc(), "Code": 203, "State": "Failure"}
+        res = {
+            "error": traceback.format_exc(),
+            "modal_function_call_id": None,
+        }
         traceback.print_exc()
         return res
 
 
 if __name__ == "__main__":
-    import os
-    import time
-
-    # save_dir = r"/home/wanglong/PycharmProjects/lambda_crown/cad_git/download"
-    # cases = os.listdir(save_dir)
-    # for case_id in cases:
-    #     case_id = "0c4f68c4-43e1-4efd-8547-4f17ec30a32e"
-    #     print(case_id)
-    #     with open(os.path.join(save_dir, case_id, "gpu-step-2-result.json"), "r") as f:
-    #         event_ = json.load(f)
-    #     event = event_["cpu_process_info"]
-    #     s1 = time.time()
-    #     out = handler(event, os.path.join(save_dir, case_id))
-    #     s2 = time.time()
-    #     out["Msg"]["data"]['prep_extended'] = event_['prep_extended']
-    #     print(s2 - s1)
-    #     with open(os.path.join(save_dir, case_id, "std.json"), "w") as f:
-    #         f.write(json.dumps(out["Msg"]["data"]))
-    #     break
-
-    save_dir = "test_data"
-    case_id = "0617"
-
-    with open(os.path.join(save_dir, case_id, "gpu.json"), "r") as f:
-        event = json.load(f)["cpu_process_info"]
-
-    out = handler(event, os.path.join(save_dir, case_id))
-
-    with open(os.path.join(save_dir, case_id, "std1.json"), "w") as f:
-        f.write(json.dumps(out["Msg"]["data"]))
-    # print
+    # with open("test_data/c1/inlay_standard_lambda.json", "r") as f:
+    #     data_gpu = json.load(f)
+    with open("/home/wanglong/下载/data/02/inlay_standard_lambda.json", "r") as f:
+        data = json.load(f)
+    
+    # event = {
+    #     "beiya_id": 45,
+    #     "preop_or_mirror": "mirror",
+    #     "std_crown": data["stdcrown"],
+    #     "mirror_id": "34",
+    #     "all_other_crown": data_gpu["all_teeth_seg"],
+    #     "rot_matrix": data_gpu["inlay_res"]["45"]["rot_matrix"]
+    # }
+    data["test"] = True
+    data["save_path"] = "."
+    handler(data, None)

@@ -1,0 +1,33 @@
+# 本地 Flask 测试应用镜像，与 Lambda 共用同一套 crown_cpu 与依赖，仅运行时不同。
+FROM docker.1ms.run/python:3.11.11
+
+ARG APP_DIR="/app"
+WORKDIR ${APP_DIR}
+
+# 复制代码与依赖列表
+COPY requirements.txt ${APP_DIR}/
+# 安装依赖
+RUN pip install uv -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN uv pip install --system -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+COPY . ${APP_DIR}
+
+# 与现有 Dockerfile 一致的 apt 源与系统库
+RUN echo "deb https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main" > /etc/apt/sources.list \
+    && echo "deb-src https://mirrors.tuna.tsinghua.edu.cn/debian/ bookworm main" >> /etc/apt/sources.list
+RUN apt-get update && apt-get install -y\
+    libgl1-mesa-glx libxi6 libxkbcommon0\
+    && rm -rf /var/lib/apt/lists/*
+COPY ./object_print3d_utils /usr/lib/python3.11/site-packages/bpy/4.2/scripts/addons/object_print3d_utils
+
+ENV LD_LIBRARY_PATH=${APP_DIR}
+ENV PYTHONUNBUFFERED=1
+ENV REQUEST_TIMEOUT=180
+
+COPY ./start.sh ${APP_DIR}/start.sh
+RUN chmod +x ${APP_DIR}/start.sh
+
+EXPOSE 5000
+
+CMD ["./start.sh"]
+# docker build -f ./Dockerfile.flask -t inlay:local .

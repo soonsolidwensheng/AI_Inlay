@@ -60,10 +60,33 @@ def cdist(K: np.ndarray, B: np.ndarray) -> np.ndarray:
     assert K.ndim == 2
     assert B.ndim == 2
 
-    K = np.expand_dims(K, 1)
-    B = np.expand_dims(B, 0)
-    D = K - B
-    return np.linalg.norm(D, axis=2)
+    # 检查输入数组是否为空
+    if K.size == 0 or B.size == 0:
+        raise ValueError("Input arrays cannot be empty")
+
+    # 检查输入数组的数据类型是否一致
+    if K.dtype != B.dtype:
+        raise ValueError(
+            f"Data types of K and B must match. Got {K.dtype} and {B.dtype}"
+        )
+
+    # 检查输入数组是否包含无效值
+    if np.isnan(K).any() or np.isnan(B).any():
+        raise ValueError("Input arrays cannot contain NaN values")
+    # K = np.expand_dims(K, 1)
+    # B = np.expand_dims(B, 0)
+    # D = K - B
+    # return np.linalg.norm(D, axis=2)
+    # ||a-b||^2 = ||a||^2 + ||b||^2 - 2 a·b
+    a2 = np.einsum('ij,ij->i', K, K)      # (m,)
+    b2 = np.einsum('ij,ij->i', B, B)      # (n,)
+    ab = np.dot(K, B.T)                   # (m, n)
+
+    # 用广播完成 a2[:,None] + b2[None,:] - 2 ab
+    D2 = a2[:, None] + b2 - 2 * ab
+    # 避免负数误差
+    np.maximum(D2, 0, out=D2)
+    return np.sqrt(D2, out=D2)            # 就地开根号，省一次分配
 
 
 def pairwise_radial_basis(K: np.ndarray, B: np.ndarray) -> np.ndarray:
@@ -87,7 +110,6 @@ def pairwise_radial_basis(K: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
     # r_mat(i, j) is the Euclidean distance between K(i, :) and B(j, :).
     r_mat = cdist(K, B)
-
     pwise_cond_ind1 = r_mat >= 1
     pwise_cond_ind2 = r_mat < 1
     r_mat_p1 = r_mat[pwise_cond_ind1]
@@ -154,8 +176,9 @@ def find_coefficients(
     # Target points
     M = np.vstack([np.hstack([K, P]), np.hstack([P.T, np.zeros((d + 1, d + 1))])])
     Y = np.vstack([target_points, np.zeros((d + 1, d))])
-    for n in range(M.shape[0]):
-        M[n, n] += 1e-6
+    # for n in range(M.shape[0]):
+    #     M[n, n] += 1e-6
+    np.fill_diagonal(M, M.diagonal() + 1e-6)
     # solve for M*X = Y.
     # At least d+1 control points should not be in a subspace; e.g. for d=2, at
     # least 3 points are not on a straight line. Otherwise M will be singular.
@@ -200,17 +223,16 @@ def transform(
         )
 
     n = source_points.shape[0]
-
     A = pairwise_radial_basis(source_points, control_points)
     K = np.hstack([A, np.ones((n, 1)), source_points])
 
     deformed_points = np.dot(K, coefficient)
+    
     return deformed_points
 
 
 def tps2(mesh, point_idx, point_dst):
     """
-
     Args:
         mesh: 待变形网格模型
         point_idx: 待变形网格顶点索引 shape:(N)
@@ -280,15 +302,22 @@ def tps2(mesh, point_idx, point_dst):
     return mesh_out
 
 
-def tps(mesh, point_idx, point_dst, lambda_=0.5):
+def tps_runner(mesh, point_idx, point_dst, lambda_=0.5):
     trans = TPS(mesh.vertices[point_idx], point_dst, lambda_=lambda_)
-    transformed_xy = trans(mesh.vertices)
-    if type(mesh) is trimesh.Trimesh:
-        return trimesh.Trimesh(transformed_xy, mesh.faces)
-    else:
-        mesh.update_mesh(transformed_xy)
-        return mesh
+    transformed_xyz = trans(mesh.vertices)
+    ret = trimesh.Trimesh(transformed_xyz, mesh.faces)
+    ret.vertex_normals = mesh.vertex_normals
+    return ret
 
 
 if __name__ == "__main__":
+    """
+    A demo of how to use TPS()
+    """
+    mesh = trimesh.load("cube.obj")
+    point_idx = np.array([0, 1, 2])
+    point_dst = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0], [2.0, 2.0, 2.0]])
+    trans = TPS(mesh.vertices[point_idx], point_dst)
+    transformed_xyz = trans(mesh.vertices)
+    transformed_mesh = trimesh.Trimesh(transformed_xyz, mesh.faces)
     pass

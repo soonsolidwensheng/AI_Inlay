@@ -1,14 +1,45 @@
 import open3d as o3d
 import numpy as np
-from tps import tps
+from tps import TPS
 import time
 import trimesh
 from scipy.spatial import cKDTree
-import matplotlib.pyplot as plt
-from sklearn.cluster import DBSCAN
+# import matplotlib.pyplot as plt
+from sklearn.cluster import DBSCAN, KMeans
 from sklearn.linear_model import LinearRegression
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.distance import cdist
 from sklearn.metrics import r2_score, mean_squared_error
+import matplotlib.pyplot as plt
+import copy
+
+def normalize(v):
+    return v / np.linalg.norm(v)
+
+
+def rotation_matrix_from_vectors(vec1, vec2):
+    """Find the rotation matrix that aligns vec1 to vec2"""
+    a, b = normalize(vec1), normalize(vec2)
+    v = np.cross(a, b)
+    c = np.dot(a, b)
+    s = np.linalg.norm(v)
+    if s == 0:
+        return np.eye(3)  # 平行或反向
+    kmat = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    rotation_matrix = np.eye(3) + kmat + kmat.dot(kmat) * ((1 - c) / (s**2))
+    M = np.eye(4)
+    M[:3, :3] = rotation_matrix
+    return M, rotation_matrix
+
+def getBoundaryPoints(mesh):
+    """get the boundary points of a mesh IN THE ORDER of how they appear in the mesh"""
+    if type(mesh) is not trimesh.Trimesh:
+        mesh = trimesh.Trimesh(mesh.vertices, mesh.triangles)
+    unique_elements, counts = np.unique(mesh.edges_sorted, return_counts=True, axis=0)
+    edges = unique_elements[np.where(counts == 1)[0]]
+    boundary_point_id = np.unique(edges.flatten())
+    boundary_point = mesh.vertices[boundary_point_id]
+    return boundary_point, boundary_point_id
 
 def align_mesh_to_direction(mesh, direction):
     # 计算旋转矩阵，使得 direction 与 y 轴负方向对齐
@@ -31,6 +62,49 @@ def inverse_transform_mesh(mesh, rotation_matrix):
     transformed_vertices = vertices @ inverse_rotation_matrix.T
     mesh.vertices = o3d.utility.Vector3dVector(transformed_vertices)
     return mesh
+
+def is_point_in_polygon(point, polygon):
+    # 使用射线法判断点是否在多边形内
+    x, z = point
+    n = len(polygon)
+    inside = False
+
+    p1x, p1z = polygon[0]
+    for i in range(n + 1):
+        p2x, p2z = polygon[i % n]
+        if z > min(p1z, p2z):
+            if z <= max(p1z, p2z):
+                if x <= max(p1x, p2x):
+                    if p1z != p2z:
+                        xinters = (z - p1z) * (p2x - p1x) / (p2z - p1z) + p1x
+                    if p1x == p2x or x <= xinters:
+                        inside = not inside
+        p1x, p1z = p2x, p2z
+
+    return inside
+
+def margin_and_shadow(mesh, ids):
+    # 判断边缘是否处于倒凹阴影内
+    # 获取边缘轮廓顶点和其余顶点
+    vertices = np.asarray(mesh.vertices)
+    edge_vertices = vertices[ids]
+    other_vertices = np.delete(vertices, ids, axis=0)
+
+    # 投影到 xz 平面
+    edge_vertices_xz = edge_vertices[:, [0, 2]]
+    other_vertices_xz = other_vertices[:, [0, 2]]
+
+    # 判断other_vertices_xz中的点是否在多边形外
+    outside_points = []
+    for point in other_vertices_xz:
+        if not is_point_in_polygon(point, edge_vertices_xz):
+            outside_points.append(point)
+    
+    # 将outside_points从other_vertices_xz中移除，得到内部点
+    outside_points_set = set(map(tuple, outside_points))
+    #inside_points = np.array([point for point in other_vertices_xz if tuple(point) not in outside_points_set])
+
+    return outside_points
 
 def find_blocking_vertices(mesh, direction=[0, -1, 0], epsilon=1e-6):
     """
@@ -80,77 +154,92 @@ def find_blocking_vertices(mesh, direction=[0, -1, 0], epsilon=1e-6):
     return blocking_vertices, intersection_vertices, normals
 
 def local_origin(blocking_points_2d, intersection_points_2d, normals, eps_value = 0.25, min_samples_value = 1):
+    #初始化
+    patch_num = 0
+    patch_points = []
+    local_origin_points = []
+
+    #投影法线
+    for point, normal in zip(intersection_points_2d, normals):
+        direction = normal[[0, 2]]
+        direction /= np.linalg.norm(direction)
+    
     # eps_value: 聚类邻域半径，根据点间距调整
     # min_samples_value: 聚类最小邻域点数，根据密度调整
     # 执行DBSCAN聚类
     db = DBSCAN(eps=eps_value, min_samples=min_samples_value)
     clusters = db.fit_predict(blocking_points_2d)
     labels = db.labels_
-    moved_points = []
-
-    for point, normal in zip(intersection_points_2d, normals):
-        direction = normal[[0, 2]]
-        direction /= np.linalg.norm(direction)
-        plt.arrow(point[0], point[1], direction[0], direction[1],
-                  head_width=0.05, head_length=0.1, fc='pink', ec='pink')
 
     for cluster_id in np.unique(labels):
         # 提取当前簇的点
         cluster_mask = (labels == cluster_id)
         cluster_data = blocking_points_2d[cluster_mask]
-        # 计算每个簇所有点的中心点
-        cluster_center = np.mean(cluster_data, axis=0)
-        plt.scatter(cluster_center[0], cluster_center[1], c='k', marker='x', s=100)
-        if len(cluster_data) > 1:
-            # print('簇中心点：', cluster_center)
-            # print(len(cluster_data))
-            # 使用线性回归拟合直线
-            reg = LinearRegression().fit(cluster_data[:, 0].reshape(-1, 1), cluster_data[:, 1])
-            slope = reg.coef_[0]
-            intercept = reg.intercept_
 
-            # 计算预测值
-            y_pred = reg.predict(cluster_data[:, 0].reshape(-1, 1))
+        # 计算簇内点之间跨度
+        max_x = cluster_data[:, 0].max()
+        min_x = cluster_data[:, 0].min()
+        max_z = cluster_data[:, 1].max()
+        min_z = cluster_data[:, 1].min()
+        max_gap = max(max_x - min_x, max_z - min_z)
+        if 0 < max_gap <= 1:
+            patch = 1
+        elif 1 < max_gap <= 2:
+            patch = 2
+        elif 2 < max_gap <= 3:
+            patch = 3
+        elif 3 < max_gap <= 4:  
+            patch = 4
+        elif 4 < max_gap <= 5:
+            patch = 5
+        elif 5 < max_gap <= 6:
+            patch = 6
+        elif max_gap > 6:
+            patch = 7
 
-            # 计算R²和MSE
-            r2 = r2_score(cluster_data[:, 1], y_pred)
-            mse = mean_squared_error(cluster_data[:, 1], y_pred)
+        if max_gap > 1:
+            # 拆分簇
+            kmeans = KMeans(n_clusters=patch, n_init=10)
+            sub_labels = kmeans.fit_predict(cluster_data)
+            for sub_cluster_id in range(patch):
+                sub_cluster_data = cluster_data[sub_labels == sub_cluster_id]
+                patch_num += 1
+                patch_points.append(sub_cluster_data)
 
-            #print(f'R²: {r2}, MSE: {mse}')
-            if r2 < 0.2:
-                moved_point = [0, 0]
-                moved_points.append(moved_point)
-                plt.scatter(moved_point[0], moved_point[1], c='m', marker='o', s=50)
-            else:
-                # 生成切线的x坐标范围
-                x_vals = np.linspace(cluster_data[:, 0].min() - 0.1, cluster_data[:, 0].max() + 0.1, 100)
-                y_vals = slope * x_vals + intercept
-                plt.plot(x_vals, y_vals, 'k--')
-                # 计算垂直于切线的方向
-                perpendicular_direction = np.array([-slope, 1])
-                perpendicular_direction /= np.linalg.norm(perpendicular_direction)
-                # 判断向着切线的哪一侧移动
+                # 计算每个子簇的中心点
+                sub_cluster_center = np.mean(sub_cluster_data, axis=0)
+                # 处理子簇的方向和移动
                 directions = []
-                for point in cluster_data:
+                for point in sub_cluster_data:
                     idx = np.where(np.isclose(intersection_points_2d, point, atol=1e-5).all(axis=1))[0]
                     if len(idx) > 0:
                         directions.append(normals[idx[0]][[0, 2]])
                 avg_direction = np.mean(directions, axis=0)
                 avg_direction /= np.linalg.norm(avg_direction)
-                if np.dot(perpendicular_direction, avg_direction) > 0:
-                    perpendicular_direction = -perpendicular_direction
-                # 向局部网格内部方向移动1mm距离
-                moved_point = cluster_center + perpendicular_direction * 1.5
-                moved_points.append(moved_point)
-                plt.scatter(moved_point[0], moved_point[1], c='m', marker='o', s=50)
+                # 沿法线平均方向的反方向移动1.5mm
+                moved_point = sub_cluster_center + (-avg_direction) * 1.5
+                local_origin_points.append(moved_point)
+            
         else:
-            moved_point = [0,0]
-            moved_points.append(moved_point)
-            plt.scatter(moved_point[0], moved_point[1], c='m', marker='o', s=50)
+            patch_num += 1
+            patch_points.append(cluster_data)
+            # 计算每个簇所有点的中心点
+            cluster_center = np.mean(cluster_data, axis=0)
 
-    return labels, moved_points
+            directions = []
+            for point in cluster_data:
+                idx = np.where(np.isclose(intersection_points_2d, point, atol=1e-5).all(axis=1))[0]
+                if len(idx) > 0:
+                    directions.append(normals[idx[0]][[0, 2]])
+            avg_direction = np.mean(directions, axis=0)
+            avg_direction /= np.linalg.norm(avg_direction)
+            # 沿法线平均方向的反方向移动1.5mm
+            moved_point = cluster_center + (-avg_direction) * 1.5
+            local_origin_points.append(moved_point)
 
-def find_shadow_points(mesh, blocking_vertices, blocking_points_2d, labels, local_points, intersection_vertices):
+    return patch_num, patch_points, local_origin_points
+
+def find_shadow_points(mesh, blocking_vertices, blocking_points_2d, patch_num, patch_points, local_origin_points, intersection_vertices):
     vertices = np.asarray(mesh.vertices)
     intersection_vertices = np.asarray(intersection_vertices)
     shadow_vertices_all = []
@@ -158,11 +247,13 @@ def find_shadow_points(mesh, blocking_vertices, blocking_points_2d, labels, loca
     lengths_all = []
     local_points_all = []
 
-    for cluster_id in np.unique(labels):
+    for cluster_id in range(patch_num):
+        #print('cluster_id:', cluster_id)
         # 提取当前簇的点
-        cluster_mask = (labels == cluster_id)
-        cluster_data = blocking_points_2d[cluster_mask]
-        local_origin = local_points[cluster_id]
+        cluster_data = patch_points[cluster_id]
+        local_origin = local_origin_points[cluster_id]
+        # print('cluster_data:', cluster_data)
+        # print('local_origin:', local_origin)
 
         for v in cluster_data:
             # 获取对应的真实三维坐标点
@@ -170,16 +261,16 @@ def find_shadow_points(mesh, blocking_vertices, blocking_points_2d, labels, loca
             real_point = blocking_vertices[real_point_idx]
             v_xz = v
 
-            # 条件1：距离小于 0.15mm
+            # 条件1：距离小于 0.3mm
             xz_projections = vertices[:, [0, 2]]
             distances = np.linalg.norm(xz_projections - v_xz, axis=1)
-            mask_condition1 = distances < 0.2
+            mask_condition1 = distances < 0.3
 
             # 条件2：y坐标在簇发射点和穿透点之间
             intersection_mask = np.all(np.isclose(intersection_vertices[:, [0, 2]], v_xz), axis=1)
             if np.any(intersection_mask):
                 min_y_intersection = np.min(intersection_vertices[intersection_mask][:, 1])
-                mask_condition2 = (vertices[:, 1] < real_point[1]) & (vertices[:, 1] > min_y_intersection - 0.1)
+                mask_condition2 = (vertices[:, 1] < real_point[1] - 0.05) & (vertices[:, 1] > min_y_intersection - 0.1)
             else:
                 mask_condition2 = np.zeros_like(mask_condition1, dtype=bool)
 
@@ -220,7 +311,7 @@ def find_shadow_points(mesh, blocking_vertices, blocking_points_2d, labels, loca
 
     return shadow_vertices, new_vertices, center_vertices
 
-def fitune_vertices(new_vertices, center_vertices, distance_threshold=0.6, angle_threshold=10):
+def fitune_vertices(new_vertices, center_vertices, distance_threshold=0.6, angle_threshold=25):
     # 精细化调整移动点
     #条件1: 按照y轴值从大到小排序
     sorted_indices = np.argsort(-np.array(new_vertices)[:, 1])
@@ -259,16 +350,46 @@ def fitune_vertices(new_vertices, center_vertices, distance_threshold=0.6, angle
     new_vertices = new_vertices[original_order_indices]
     return new_vertices
 
-def filling_undercut(mesh, undercut_direction):
+def filling_undercut(mesh, undercut_direction, save_path=None, display=False):
+
+    mesh.compute_vertex_normals()
+    mesh.remove_duplicated_vertices()
+    mesh.remove_degenerate_triangles()
+    mesh.remove_unreferenced_vertices()
+    
+    # 新增网格简化逻辑
+    target_triangles = 8000
+    if len(mesh.triangles) > target_triangles:
+        mesh = mesh.simplify_quadric_decimation(target_triangles)
     
     # 变换模型使得倒凹方向与 y 轴负方向一致
-    trans_mesh, rotation_matrix = align_mesh_to_direction(mesh, undercut_direction)
-    #print('Rotation matrix:', rotation_matrix)
+    # trans_mesh, rotation_matrix = align_mesh_to_direction(mesh, undercut_direction)
+    M, rotation_matrix = rotation_matrix_from_vectors(undercut_direction, [0, -1, 0])
+    trans_mesh = copy.copy(mesh)
+    vertices = np.asarray(trans_mesh.vertices)
+    transformed_vertices = vertices @ rotation_matrix.T
+    trans_mesh.vertices = o3d.utility.Vector3dVector(transformed_vertices)
+    print('Rotation matrix:', rotation_matrix)
+    
     #o3d.io.write_triangle_mesh(path + 'trans_mesh.stl', mesh)
+
+    # 判断边缘是否处于倒凹阴影内，ids为带顺序的边缘顶点索引
+    # outside_points = margin_and_shadow(trans_mesh, ids)
+    # print(f'Number of outside points: {len(outside_points)}')
     
     # 寻找发射点与被穿透点
     blocking_vertices, intersection_vertices, normals = find_blocking_vertices(trans_mesh, direction=[0, -1, 0])
     print(f'Number of blocking vertices: {len(blocking_vertices)}')
+    print(f'Number of intersection vertices: {len(intersection_vertices)}')
+
+    if display:
+        vis_list1 = [trans_mesh, o3d.geometry.TriangleMesh.create_coordinate_frame(size=5)] # 可视化列表
+        blocking_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(blocking_vertices)))
+        blocking_pc.paint_uniform_color([1, 0, 0])
+        intersection_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(intersection_vertices)))
+        intersection_pc.paint_uniform_color([1, 1, 0])
+        vis_list1 += [blocking_pc, intersection_pc]
+        o3d.visualization.draw_geometries(vis_list1)
     
     if len(blocking_vertices) > 0:
     # 聚类寻找簇原点
@@ -276,40 +397,153 @@ def filling_undercut(mesh, undercut_direction):
         intersection_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(intersection_vertices)))
         blocking_points_2d = np.asarray(blocking_pc.points)[:, [0, 2]]
         intersection_points_2d = np.asarray(intersection_pc.points)[:, [0, 2]]
-        labels, local_points = local_origin(blocking_points_2d, intersection_points_2d, normals)
+        patch_num, patch_points, local_origin_points = local_origin(blocking_points_2d, intersection_points_2d, normals)
 
         # 寻找被遮挡的阴影点，并移动它们
-        shadow_vertices, new_vertices, center_vertices = find_shadow_points(trans_mesh, blocking_vertices, blocking_points_2d, labels, local_points, intersection_vertices)
+        shadow_vertices, new_vertices, center_vertices = find_shadow_points(trans_mesh, blocking_vertices, blocking_points_2d, patch_num, patch_points, local_origin_points, intersection_vertices)
         print(f'Number of shadow vertices: {len(shadow_vertices)}')
+        print(f'Number of new vertices: {len(new_vertices)}')
+        print(f'Number of center vertices: {len(center_vertices)}')
+
 
         if len(shadow_vertices) > 0:
             #精细化调整移动点
             final_vertices = fitune_vertices(new_vertices, center_vertices)
 
+            if display:
+                vis_list2 = [trans_mesh, o3d.geometry.TriangleMesh.create_coordinate_frame(size=5)] # 可视化列表
+                blocking_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(blocking_vertices)))
+                blocking_pc.paint_uniform_color([1, 0, 0])
+                intersection_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(intersection_vertices)))
+                intersection_pc.paint_uniform_color([1, 1, 0])
+                shadow_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(shadow_vertices)))
+                shadow_pc.paint_uniform_color([0, 0, 1])
+                new_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(new_vertices)))
+                final_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(np.array(final_vertices)))
+                final_pc.paint_uniform_color([0, 1, 0])
+
+                # x-z平面
+                shadow_points_2d = np.asarray(shadow_pc.points)[:, [0, 2]]
+                new_points_2d = np.asarray(new_pc.points)[:, [0, 2]]
+                final_points_2d = np.asarray(final_pc.points)[:, [0, 2]]
+
+                # 创建二维图像A
+                plt.figure(figsize=(10, 10))
+                plt.scatter(shadow_points_2d[:, 0], shadow_points_2d[:, 1],
+                            c='b', alpha=0.3, label='Shadow Vertices')
+                plt.scatter(blocking_points_2d[:, 0], blocking_points_2d[:, 1],
+                            c='r', alpha=0.8, label='Blocking Vertices')
+                plt.scatter(intersection_points_2d[:, 0], intersection_points_2d[:, 1],
+                            c='y', alpha=0.5, label='Intersection Vertices')
+                plt.scatter(new_points_2d[:, 0], new_points_2d[:, 1],
+                            c='g', alpha=0.5, label='New Vertices')
+
+                plt.gca().invert_yaxis()  # 反转Z轴方向
+                # 设置图像属性
+                plt.title(f'2D Projection of Vertices (Y-Axis Discarded)')
+                plt.xlabel('X Coordinate')
+                plt.ylabel('Z Coordinate')
+                plt.grid(True)
+                plt.legend()
+                plt.tight_layout()
+
+                # 保存和显示
+                # plt.savefig(path + 'all_verticesA.png', dpi=300)
+                plt.show()
+
+                # 创建二维图像B
+                plt.figure(figsize=(10, 10))
+                plt.scatter(new_points_2d[:, 0], new_points_2d[:, 1],
+                            c='m', alpha=0.5, label='New Vertices')
+                plt.scatter(final_points_2d[:, 0], final_points_2d[:, 1],
+                            c='g', alpha=0.5, label='Final Vertices')
+
+                plt.gca().invert_yaxis()  # 反转Z轴方向
+                # 设置图像属性
+                plt.title(f'2D Projection of Vertices (Y-Axis Discarded)')
+                plt.xlabel('X Coordinate')
+                plt.ylabel('Z Coordinate')
+                plt.grid(True)
+                plt.legend()
+                plt.tight_layout()
+
+                # 保存和显示
+                # plt.savefig(path + 'all_verticesB.png', dpi=300)
+                plt.show()
+
+                vis_list2 += [intersection_pc, blocking_pc, shadow_pc, final_pc]
+                o3d.visualization.draw_geometries(vis_list2)
+            
             # 使用 KDTree 快速查找最近邻索引
             original_vertices = np.asarray(trans_mesh.vertices)
             tree = cKDTree(original_vertices)
             _, point_idx = tree.query(np.array(shadow_vertices))
 
+            bound_points, bound_indices = getBoundaryPoints(trans_mesh)
+            dist_boundary = cdist(original_vertices[point_idx], bound_points).min(axis=1)
+            dist_mask = dist_boundary > 0.2
+            # boundary_num = np.sum(~dist_mask)
+
             # 所有目标坐标（未变形的顶点保持不变，变形的顶点替换为 new_vertices）
             all_point_idx = np.arange(len(original_vertices))
             all_point_dst = original_vertices.copy()
-            all_point_dst[point_idx] = np.array(final_vertices)
+            boundary_dist = np.linalg.norm(all_point_dst[point_idx[~dist_mask]] - np.array(final_vertices)[~dist_mask], axis=1)
+            boundary_num = np.sum(boundary_dist > 0.03)
+            all_dist = np.linalg.norm(all_point_dst[point_idx] - np.array(final_vertices), axis=1)
+            bound_ori = all_point_dst[point_idx[~dist_mask]]
+            bound_new = np.array(final_vertices)[~dist_mask]
+            tps_ori = all_point_dst[point_idx[dist_mask]]
+            tps_new = np.array(final_vertices)[dist_mask]
+            dmin, dmax = 0.0, 1.0
+            t = np.clip((all_dist - dmin) / (dmax - dmin), 0, 1)
+            # viridis = np.array([
+            #     [68, 1, 84],
+            #     [59, 82, 139],
+            #     [33, 144, 140],
+            #     [94, 201, 98],
+            #     [253, 231, 37]
+            # ]) 
+            viridis = np.array([[255,0,0], [255,255,255], [0,0,255]])
+            rgb = np.clip(
+                np.round([
+                    np.interp(t, np.linspace(0, 1, viridis.shape[0]), viridis[:, 0]),
+                    np.interp(t, np.linspace(0, 1, viridis.shape[0]), viridis[:, 1]),
+                    np.interp(t, np.linspace(0, 1, viridis.shape[0]), viridis[:, 2])
+                ]).T.astype(np.uint8),
+                0, 255
+            )
+            rgb_bound = rgb[~dist_mask]
+            rgb_tps = rgb[dist_mask]
+            out_info = {
+                'boundary_num': boundary_num,
+                'bound_ori': bound_ori,
+                'bound_new': bound_new,
+                'rgb_bound': rgb_bound,
+                'tps_ori': tps_ori,
+                'tps_new': tps_new,
+                'rgb_tps': rgb_tps
+            }
+
+            all_point_dst[point_idx[dist_mask]] = np.array(final_vertices)[dist_mask]
 
             # 执行 TPS 变形
-            undercut_filled_mesh = tps(
-                trimesh.Trimesh(vertices=original_vertices, faces=np.asarray(trans_mesh.triangles)),  # 使用 trimesh.Trimesh 对象
-                point_idx=all_point_idx,
-                point_dst=all_point_dst,
-                lambda_=0.5  # 可调节形变刚度参数
-            )
-            #undercut_filled_mesh.export(path + 'trans_undercut_filled.stl')
+            # undercut_filled_mesh = tps(
+            #     trimesh.Trimesh(vertices=original_vertices, faces=np.asarray(trans_mesh.triangles)),  # 使用 trimesh.Trimesh 对象
+            #     point_idx=all_point_idx,
+            #     point_dst=all_point_dst,
+            #     lambda_=0.1  # 可调节形变刚度参数
+            # )
+            trans = TPS(original_vertices[all_point_idx], all_point_dst, lambda_=0.5)
+            undercut_filled_mesh = trimesh.Trimesh(trans(np.asarray(trans_mesh.vertices)), trans_mesh.triangles)
 
             # 将新模型变换回初始位置
             undercut_filled_mesh_o3d = o3d.geometry.TriangleMesh(
                 vertices=o3d.utility.Vector3dVector(undercut_filled_mesh.vertices),
                 triangles=o3d.utility.Vector3iVector(undercut_filled_mesh.faces)
             )
+            if save_path:
+                undercut_filled_mesh_o3d.compute_vertex_normals()
+                o3d.io.write_triangle_mesh(f'{save_path}/undercut.stl', undercut_filled_mesh_o3d)
 
             new_mesh = inverse_transform_mesh(undercut_filled_mesh_o3d, rotation_matrix)
             new_mesh.remove_duplicated_vertices()
@@ -326,7 +560,9 @@ def filling_undercut(mesh, undercut_direction):
                 vertex_normals=np.asarray(new_mesh.vertex_normals)
             )
 
-            return tri_mesh
+            out_info['rotation_matrix'] = rotation_matrix
+
+            return tri_mesh, out_info
 
         else:
             tri_mesh = trimesh.Trimesh(
@@ -334,7 +570,7 @@ def filling_undercut(mesh, undercut_direction):
                 faces=np.asarray(mesh.triangles),
                 vertex_normals=np.asarray(mesh.vertex_normals)
             )
-            return tri_mesh
+            return tri_mesh, None
 
     else:
         tri_mesh = trimesh.Trimesh(
@@ -342,4 +578,4 @@ def filling_undercut(mesh, undercut_direction):
             faces=np.asarray(mesh.triangles),
             vertex_normals=np.asarray(mesh.vertex_normals)
         )
-        return tri_mesh
+        return tri_mesh, None

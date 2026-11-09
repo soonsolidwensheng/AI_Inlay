@@ -6,7 +6,7 @@ import open3d
 import DracoPy
 import trimesh
 import numpy as np
-
+from geomdl import BSpline
 
 class DAC:
     """
@@ -39,7 +39,8 @@ class DAC:
         dac_control_points, T, A = self.get_best_fit_scaled_dac()
         # sort control points
         control_points = np.array([dac_control_points[str(tid)] for tid in self.teeth_order if str(tid) in dac_control_points])
-        curve = geomdl.NURBS.Curve() # init curve
+        # curve = geomdl.NURBS.Curve() # init curve
+        curve = BSpline.Curve() # init curve
         curve.degree = order
         ctrl_pts = [list(p) for p in control_points]
         curve.ctrlpts = ctrl_pts
@@ -198,3 +199,10 @@ def read_mesh_bytes(buffer):
     V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
     F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
     return trimesh.Trimesh(vertices=V, faces=F)
+
+
+if __name__ == '__main__':
+    with open('/home/wanglong/pyproject/lambda_crown/AI_Inlay_Generation/test_data/pre_post/test/gpu_result.json', 'r') as f:
+        crowns = json.load(f)['cpu_process_info']['all_other_crowns']
+    dac = DAC(crowns, None, 36, 0)
+    out = dac.get_dac_nurbs()
