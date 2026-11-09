@@ -13,7 +13,7 @@ import yaml
 from InlayAdaptation import InlayAdaptation
 from inlaylast import inlayPostWarp
 from register import MeshRegistration
-from utils import find_changed_faces, find_new_points, get_thickness_gap2, stitch_edge
+from utils import find_changed_faces, find_new_points, get_thickness_gap2, stitch_edge, get_roi_from_upper_lower
 
 
 def remove_duplicate(
@@ -39,6 +39,8 @@ class InlayGeneration:
         fill_undercut: bool = False,
         save_path: str = None,
         paras: dict = None,
+        inner=None,
+        thickness_shell=None,
     ) -> None:
         self.configs = None
         self.tooth_lib_configs = None
@@ -66,6 +68,11 @@ class InlayGeneration:
         self.configs["save_path"] = self.save_path
         self.configs["tooth_lib_configs"] = self.tooth_lib_configs
         self.configs["fill_undercut"] = fill_undercut
+        # 由 thickness_shell 接口预计算后传入；run() 里透传给 MeshRegistration.run，
+        # 传入时跳过填倒凹 / 粘接间隙 / 厚度外壳计算。用 *_input 命名避免与输出属性
+        # self.inner_dilation / self.thickness_shell 同名冲突。
+        self.inner_input = inner
+        self.thickness_shell_input = thickness_shell
 
     def get_configs(self):
         with open("configs.yaml", "r") as f:
@@ -228,7 +235,6 @@ class InlayGeneration:
 
     def run(self) -> None:
         # self.register_lib_tooth()
-
         # registeration =============================================
         if self.configs["isSave"]:
             open3d.io.write_triangle_mesh(
@@ -239,10 +245,18 @@ class InlayGeneration:
                 os.path.join(self.configs["save_path"], f"anta_scan_{self.tid}.ply"),
                 self.anta_scan,
             )
+
+        prep_scan = get_roi_from_upper_lower(self.o3d2tri(self.prep_scan), self.o3d2tri(self.prep_tooth))
+        if self.configs["isSave"]:
+            open3d.io.write_triangle_mesh(
+                os.path.join(self.configs["save_path"], f"debug_q_input_register_{self.tid}.ply"),
+                self.inlay_inner,
+            )
         mesh_registration = MeshRegistration(self.configs)
         self.inlay_outer, self.inner_dilation, self.thickness_shell = (
             mesh_registration.run(
-                self.lib_tooth, self.prep_tooth, self.inlay_inner, self.anta_scan
+                self.lib_tooth, self.prep_tooth, self.inlay_inner, prep_scan,
+                inner=self.inner_input, thickness_shell=self.thickness_shell_input,
             )
         )
 

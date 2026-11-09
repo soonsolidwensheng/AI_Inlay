@@ -19,10 +19,9 @@ sys.path.append(".")
 sys.path.append("..")
 import tps
 from tps import tps_runner
-from utils import compute_signed_distance, get_distance, get_thickness_gap
+from utils import compute_signed_distance, get_distance, get_thickness_gap, pruner_fun
 import py_prepMorphing as morph
-from undercut_util import get_insert_direction_copy
-from directional_undercut_filling import filling_undercut, rotation_matrix_from_vectors
+import undercut_py
 
 class MeshRegistration:
     def __init__(self, configs):
@@ -50,6 +49,41 @@ class MeshRegistration:
         self.lib_tooth_configs = configs["tooth_lib_configs"]
         self.adjust_crown = configs["adjust_crown"]
         self.fill_undercut = configs["fill_undercut"]
+        self.undercut_filled = configs["undercut_filled"]
+        self.insert_dir = configs.get("insert_dir")  # 可选，None 时自动计算
+        # self.local = configs["local"]
+        # self.mesh_tmp = configs["mesh_tmp"]
+
+    def _mesh_stats(self, mesh, label="mesh"):
+        if isinstance(mesh, trimesh.Trimesh):
+            vertices = np.asarray(mesh.vertices)
+            faces = np.asarray(mesh.faces)
+        else:
+            vertices = np.asarray(mesh.vertices)
+            faces = np.asarray(mesh.triangles)
+        if vertices.size == 0:
+            return f"{label}: verts=0, faces=0"
+        bounds_min = vertices.min(axis=0)
+        bounds_max = vertices.max(axis=0)
+        center = vertices.mean(axis=0)
+        return (
+            f"{label}: verts={len(vertices)}, faces={len(faces)}, "
+            f"bbox_min={np.round(bounds_min, 4).tolist()}, "
+            f"bbox_max={np.round(bounds_max, 4).tolist()}, "
+            f"center={np.round(center, 4).tolist()}"
+        )
+
+    def _raise_tps_error(self, stage, sub_mesh, boundary_pts, init_dis, keypoints, lift_index, points):
+        keypoint_count = 0 if keypoints is None else len(np.asarray(keypoints.points))
+        points_array = np.asarray(points)
+        raise ValueError(
+            "SubMesh TPS diagnostics | "
+            f"stage={stage}, tooth={self.teeth_num}, "
+            f"sub_mesh_verts={len(sub_mesh.vertices)}, sub_mesh_faces={len(sub_mesh.triangles)}, "
+            f"boundary_pts={len(boundary_pts)}, init_dis={init_dis:.3f}, "
+            f"keypoints={keypoint_count}, lift_index={len(lift_index)}, "
+            f"points_shape={points_array.shape}"
+        )
 
     def calcuPerPoint(self, p, a, b):
         v1 = p - a
@@ -97,6 +131,21 @@ class MeshRegistration:
         """
         perform TPS deformation to adapt the mesh/pcd from last_points[:,0] to last_points[:,1]
         """
+        last_points = np.asarray(last_points)
+        if len(last_index) == 0:
+            raise ValueError(f"TPS diagnostics | tooth={self.teeth_num}, empty last_index")
+        if last_points.ndim != 3 or last_points.shape[1:] != (2, 3):
+            raise ValueError(
+                "TPS diagnostics | "
+                f"tooth={self.teeth_num}, invalid last_points shape={last_points.shape}, "
+                f"expected=(N, 2, 3)"
+            )
+        if len(last_index) != last_points.shape[0]:
+            raise ValueError(
+                "TPS diagnostics | "
+                f"tooth={self.teeth_num}, last_index size={len(last_index)} "
+                f"does not match last_points count={last_points.shape[0]}"
+            )
         last_point_dst = (
             alph * (last_points[:, 1] - last_points[:, 0]) + last_points[:, 0]
         )
@@ -459,6 +508,48 @@ class MeshRegistration:
             out = self.cement_gap - (self.height_of_minimal_gap - h) / (
                 self.height_of_minimal_gap - self.height_of_minimal_gap2
             ) * (self.cement_gap - self.minimal_gap)
+        return out
+
+    def blockout_undercut(self, mesh_o3d, user_dir=None):
+        """用 undercut_py 对备牙内表面做倒凹填充。
+
+        输入/输出均为 open3d.geometry.TriangleMesh。
+        user_dir: 可选插入方向 (list/ndarray of 3 floats)，未传时 undercut_py 自动搜索。
+        无倒凹时原样返回。
+        """
+        mesh_o3d.compute_vertex_normals()
+        verts = np.asarray(mesh_o3d.vertices).astype(np.float32)
+        faces = np.asarray(mesh_o3d.triangles).astype(np.int32)
+        uc_mesh = undercut_py.Mesh.from_data(verts, faces)
+
+        processor = undercut_py.UndercutProcessor(uc_mesh)
+        if user_dir is not None:
+            user_dir = np.asarray(user_dir, dtype=np.float32).reshape(3)
+            detection = processor.detect_undercut(user_dir)
+        else:
+            detection = processor.detect_undercut()
+        insert_dir = np.array(detection.insert_dir, dtype=np.float32)
+        undercut_faces = detection.undercut_cut_faces
+        print(
+            f"undercut_detect | insert_dir={np.round(insert_dir, 6).tolist()}, "
+            f"undercut_faces={len(undercut_faces)}"
+        )
+        if not undercut_faces:
+            return mesh_o3d
+
+        fix_result = processor.fix_undercut(insert_dir, undercut_faces)
+        fixed = fix_result.mesh
+        print(
+            f"undercut_fix | fixed: {fixed.vertex_count()} verts, "
+            f"{fixed.face_count()} faces, failed_faces={len(fix_result.failed_faces)}"
+        )
+
+        fixed_verts = np.asarray(fixed.vertices).astype(np.float64)
+        fixed_faces = np.asarray(fixed.faces).astype(np.int64)
+        out = o3d.geometry.TriangleMesh()
+        out.vertices = o3d.utility.Vector3dVector(fixed_verts)
+        out.triangles = o3d.utility.Vector3iVector(fixed_faces)
+        out.compute_vertex_normals()
         return out
 
     def get_cement_gap(self, mesh_q):
@@ -944,6 +1035,7 @@ class MeshRegistration:
 
     def doSubMeshTps(self, dstboundary, sub_mesh, liftDis=0.5):
         tps_mesh = self.o3d2tri(sub_mesh)
+        print(self._mesh_stats(sub_mesh, "sub_mesh_before_tps"))
 
         next_mesh = sub_mesh
         next_mesh.compute_vertex_normals()
@@ -958,13 +1050,26 @@ class MeshRegistration:
         # keypoints = o3d.geometry.keypoint.compute_iss_keypoints(nextPcd)
         init_dis = 1.0
         init_keypoints_idx = np.array([], dtype=np.int64)
-        boundary_pts = np.asarray(sub_mesh.vertices)[self.getBoundSet(sub_mesh)]
+        boundary_ids = self.getBoundSet(sub_mesh)
+        boundary_pts = np.asarray(sub_mesh.vertices)[boundary_ids]
+        if len(boundary_pts) == 0:
+            self._raise_tps_error("empty_boundary", sub_mesh, boundary_pts, init_dis, None, liftIndex, [])
         boundary_pc = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(boundary_pts))
         dis_to_boundary = np.asarray(nextPcd.compute_point_cloud_distance(boundary_pc))
+        print(
+            "sub_mesh_boundary_distance | "
+            f"tooth={self.teeth_num}, boundary_pts={len(boundary_pts)}, "
+            f"min={dis_to_boundary.min():.6f}, max={dis_to_boundary.max():.6f}, "
+            f"mean={dis_to_boundary.mean():.6f}"
+        )
+        keypoints = None
         while True:
             init_keypoints_idx = np.where(dis_to_boundary > init_dis)[0]
             keypoints = nextPcd.select_by_index(init_keypoints_idx)
-            key_tree = KDTree(np.asarray(keypoints.points))
+            keypoint_array = np.asarray(keypoints.points)
+            if len(keypoint_array) == 0:
+                break
+            key_tree = KDTree(keypoint_array)
             distances, _ = key_tree.query(boundary_pts)
             dist_idx = np.where(distances > 2)[0]
             if len(dist_idx):
@@ -973,13 +1078,24 @@ class MeshRegistration:
                 init_dis -= 0.1
             else:
                 break
-            
+
+        if keypoints is None or len(np.asarray(keypoints.points)) == 0:
+            self._raise_tps_error("empty_keypoints", sub_mesh, boundary_pts, init_dis, keypoints, liftIndex, [])
+
         if len(np.asarray(keypoints.points)) > 100:
             keypoints = keypoints.farthest_point_down_sample(100)
+        print(
+            "sub_mesh_keypoints | "
+            f"tooth={self.teeth_num}, init_dis={init_dis:.3f}, "
+            f"selected={len(np.asarray(keypoints.points))}"
+        )
 
         for p in keypoints.points:
             [k, idx, _] = tree.search_knn_vector_3d(p, 1)
             liftIndex.append(idx[0])
+
+        if len(liftIndex) == 0:
+            self._raise_tps_error("empty_lift_index", sub_mesh, boundary_pts, init_dis, keypoints, liftIndex, [])
 
         nextPcd.normals = self.getPcdNormalsByMesh(nextPcd, next_mesh, 200, 1.0)
         index, points = [], []
@@ -994,6 +1110,15 @@ class MeshRegistration:
             points.append([p, p1])
 
         points = np.asarray(points)
+        print(
+            "sub_mesh_tps_controls | "
+            f"tooth={self.teeth_num}, lift_index={len(liftIndex)}, "
+            f"index={len(index)}, points_shape={points.shape}"
+        )
+        if points.ndim != 3 or points.shape[1:] != (2, 3):
+            self._raise_tps_error(
+                "invalid_control_points", sub_mesh, boundary_pts, init_dis, keypoints, liftIndex, points
+            )
         tps_mesh_ = self.doTPS(
             tps_mesh, nextPcd, index, points, self.outer_pre_lift_dis
         )  # lift the outer for 1 mm
@@ -1202,7 +1327,10 @@ class MeshRegistration:
     
     
     
-    def run(self, mesh_source, mesh_target, mesh_q, anta_scan):
+    def run(self, mesh_source, mesh_target, mesh_q, prep_scan, inner=None, thickness_shell=None):
+        # inner / thickness_shell: 由 thickness_shell 接口预计算并传入（填倒凹 +
+        # 粘接间隙 + 厚度外壳已外置）。传入时直接复用，跳过 get_cement_gap /
+        # get_thickness_gap；未传时回退到原计算逻辑（向后兼容 legacy 调用）。
         mesh = self.o3d2tri(mesh_source)
         pcd_source = o3d.geometry.PointCloud()
         pcd_source.points = mesh_source.vertices
@@ -1211,6 +1339,27 @@ class MeshRegistration:
                 os.path.join(self.save_path, f"1_b_{self.teeth_num}.ply"),
                 mesh_target,
             )
+        # if not self.undercut_filled:
+        #     if self.isSave:
+        #         o3d.io.write_triangle_mesh(
+        #             os.path.join(self.save_path, f"debug_q_before_pruner_{self.teeth_num}.ply"),
+        #             mesh_q,
+        #         )
+        #     mesh_target = pruner_fun(
+        #         prep_scan, np.asarray(mesh_target.vertices),
+        #         debug_save_dir=self.save_path if self.isSave else None,
+        #         debug_tag=f"target_{self.teeth_num}",
+        #     ).as_open3d
+        #     mesh_q = pruner_fun(
+        #         prep_scan, np.asarray(mesh_q.vertices),
+        #         debug_save_dir=self.save_path if self.isSave else None,
+        #         debug_tag=f"q_{self.teeth_num}",
+        #     ).as_open3d
+        #     if self.isSave:
+        #         o3d.io.write_triangle_mesh(
+        #             os.path.join(self.save_path, f"debug_q_after_pruner_{self.teeth_num}.ply"),
+        #             mesh_q,
+        #         )
 
         # register & tps==============================================================
         t1 = time.time()
@@ -1243,21 +1392,16 @@ class MeshRegistration:
             )
         # lifting mesh_q===============================================================
         t1 = time.time()
-        # self.liftingMesh(mesh_q, self.cement_gap_spacing, self.cement_gap_spacing_boundary, self.q_lift_radius)  #mesh, liftDis, initDis, redius
-        # self.inner_dilation = self.o3d2tri(mesh_q)
-        
-        if self.fill_undercut:
-            insert_direction = get_insert_direction_copy(mesh_q)
-            mesh_q = filling_undercut(mesh_q, insert_direction, display=False)[0].as_open3d
-            if self.save_path:
-                cylinder = trimesh.creation.cylinder(
-                    0.1,
-                    5,
-                    transform=rotation_matrix_from_vectors([0, 0, 1], insert_direction)[0],
-                )
-                cylinder.apply_translation([0, 5, 0])
-                cylinder.export(os.path.join(self.save_path, "cylinder1.stl"))
-        self.get_cement_gap(self.o3d2tri(mesh_q))
+        # 新入参（inner 已由 thickness_shell 接口预计算，含填倒凹+粘接间隙）→ 直接复用；
+        # 旧入参（未传 inner）→ 回退走完整预处理：填倒凹（undercut_py，self.insert_dir
+        # 有就用、没传自动搜索）+ 粘接间隙，与 thickness_shell 接口对齐，兼容旧输入输出。
+        if inner is not None:
+            self.inner_dilation = (
+                inner if isinstance(inner, trimesh.Trimesh) else self.o3d2tri(inner)
+            )
+        else:
+            mesh_q = self.blockout_undercut(mesh_q, user_dir=self.insert_dir)
+            self.get_cement_gap(self.o3d2tri(mesh_q))
         if self.isSave:
             self.inner_dilation.export(
                 os.path.join(
@@ -1268,9 +1412,16 @@ class MeshRegistration:
                 os.path.join(self.save_path, f"3_q_{self.teeth_num}.ply"),
                 mesh_q,
             )
-            
+
         print("2. dilation time: ", time.time() - t1)
-        self.thickness_shell, self.inner_dilation = get_thickness_gap(self.inner_dilation)
+        if thickness_shell is not None:
+            self.thickness_shell = (
+                thickness_shell
+                if isinstance(thickness_shell, trimesh.Trimesh)
+                else self.o3d2tri(thickness_shell)
+            )
+        else:
+            self.thickness_shell, self.inner_dilation = get_thickness_gap(self.inner_dilation)
         boundarySet, _ = self.getBoundaryPoints(self.tri2o3d(self.inner_dilation))
         use_morph = False
 
@@ -1399,6 +1550,12 @@ class MeshRegistration:
         t1 = time.time()
         sub_mesh, nearest_points = slice_mesh2(has_boundary_mesh, boundarySet)
         sub_mesh = self.boundarySmooth(self.tri2o3d(sub_mesh))
+        print(self._mesh_stats(sub_mesh, "sub_mesh_after_slice"))
+        print(
+            "sub_mesh_slice_context | "
+            f"tooth={self.teeth_num}, boundarySet={len(boundarySet)}, "
+            f"nearest_points={len(nearest_points)}"
+        )
         print("6. slice_mesh time: ", time.time() - t1)
         if self.isSave:
             sub_mesh.compute_vertex_normals()

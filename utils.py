@@ -1,18 +1,24 @@
 import base64
 import copy
+import os
 import random
-import pylfda
+from typing import List
+
 import DracoPy
 import MQCompressPy
+import networkx as nx
 import numpy as np
 import open3d
+import pylfda
 import trimesh
-import networkx as nx
+from pytransform3d.rotations import matrix_from_two_vectors
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
 from scipy.spatial import cKDTree
+
 from tps import TPS
-# import pypruners
+
+import pypruners
 
 
 def read_mesh(path: str) -> open3d.geometry.TriangleMesh:
@@ -64,13 +70,16 @@ def compress_drc(mesh, points_id=[]):
         assert "drc compress error"
 
 
-def read_mesh_bytes(buffer):
+def read_mesh_bytes(buffer, type="o3d"):
     if buffer is not None or buffer != "":
         a = base64.b64decode(buffer)
         mesh_object = DracoPy.decode_buffer_to_mesh(a)
         V = np.array(mesh_object.points).astype(np.float32).reshape(-1, 3)
         F = np.array(mesh_object.faces).astype(np.int64).reshape(-1, 3)
-        return trimesh.Trimesh(V, F).as_open3d
+        if type == "o3d":
+            return trimesh.Trimesh(V, F).as_open3d
+        else:
+            return trimesh.Trimesh(V, F)
     else:
         return None
 
@@ -147,27 +156,94 @@ def get_biggest_mesh(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     if type(mesh) is not trimesh.Trimesh:
         mesh = trimesh.Trimesh(mesh.vertices, mesh.triangles)
     mesh_split = mesh.split(only_watertight=False)
+    if len(mesh_split) == 0:
+        return mesh
     mesh = mesh_split[np.argmax(np.array([x.vertices.shape[0] for x in mesh_split]))]
     return mesh
 
+def clean_non_manifold_mesh(mesh):
+    mesh_o3d = mesh.as_open3d
 
-# def pruner_fun(mesh: trimesh.Trimesh, interest_verts: np.ndarray, max_distance=1.0, min_distance=-2.5, max_angle=1.5) -> trimesh.Trimesh:
-#     """
-#     通过一组点对网格进行修剪。
-#     参数:
-#     mesh (trimesh.Trimesh): 输入的网格。
-#     interest_verts (numpy.ndarray): 用于修剪的点。
-#     max_distance (float): 修剪的最大距离。
-#     min_distance (float): 修剪的最小距离。
-#     max_angle (float): 修剪的最大角度。
-#     返回:
-#     mesh (trimesh.Trimesh): 修剪后的网格。
-#     """
-#     interest_verts = mesh.nearest.vertex(interest_verts)[1].reshape(-1, 1)
-#     mesh_out = pypruners.pruner(
-#         mesh.vertices, mesh.faces, interest_verts, max_distance, min_distance, max_angle
-#     )
-#     return mesh_out
+    mesh_o3d.remove_duplicated_vertices()
+    mesh_o3d.remove_duplicated_triangles()
+    mesh_o3d.remove_degenerate_triangles()
+    mesh_o3d.remove_unreferenced_vertices()
+    mesh_o3d.remove_non_manifold_edges()
+
+    while True:
+        non_mani_p = mesh_o3d.get_non_manifold_vertices()
+        if len(non_mani_p):
+            mesh_o3d.remove_vertices_by_index(non_mani_p)
+        else:
+            break
+
+    mesh_o3d.remove_unreferenced_vertices()
+    return trimesh.Trimesh(mesh_o3d.vertices, mesh_o3d.triangles)
+
+def pruner_fun(
+    mesh: trimesh.Trimesh,
+    interest_verts: np.ndarray,
+    max_distance=1.0,
+    min_distance=-2.5,
+    max_angle=1.5,
+    debug_save_dir=None,
+    debug_tag="",
+) -> trimesh.Trimesh:
+    """
+    通过一组点对网格进行修剪。
+    参数:
+    mesh (trimesh.Trimesh): 输入的网格。
+    interest_verts (numpy.ndarray): 用于修剪的点。
+    max_distance (float): 修剪的最大距离。
+    min_distance (float): 修剪的最小距离。
+    max_angle (float): 修剪的最大角度。
+    debug_save_dir (str): 不为空时保存中间结果用于排查洞的来源。
+    debug_tag (str): debug 文件名的标签。
+    返回:
+    mesh (trimesh.Trimesh): 修剪后的网格。
+    """
+    mesh = clean_non_manifold_mesh(mesh)
+    if debug_save_dir:
+        mesh.export(os.path.join(debug_save_dir, f"debug_pruner_step1_clean_{debug_tag}.stl"))
+
+    interest_verts = mesh.nearest.vertex(interest_verts)[1].reshape(-1, 1)
+    if debug_save_dir:
+        mesh.export(os.path.join(debug_save_dir, f"debug_pruner_step2_before_call_{debug_tag}.stl"))
+
+    # 先不带 collapse_degenerates 跑一次，看洞是否与退化三角面折叠有关
+    if debug_save_dir:
+        mesh_no_collapse = pypruners.pruner(
+            np.array(mesh.vertices, dtype=np.float64),
+            np.array(mesh.faces, dtype=np.int32),
+            np.array(interest_verts, dtype=np.int32),
+            max_distance, min_distance, max_angle,
+            collapse_degenerates=False,
+            debug_save_dir=debug_save_dir,
+            debug_tag=f"no_collapse_{debug_tag}",
+        )
+        mesh_no_collapse.export(os.path.join(debug_save_dir, f"debug_pruner_step3_no_collapse_{debug_tag}.stl"))
+
+    # 正式跑（带 collapse_degenerates）
+    mesh_out = pypruners.pruner(
+        np.array(mesh.vertices, dtype=np.float64),
+        np.array(mesh.faces, dtype=np.int32),
+        np.array(interest_verts, dtype=np.int32),
+        max_distance, min_distance, max_angle,
+        collapse_degenerates=True,
+        debug_save_dir=debug_save_dir,
+        debug_tag=debug_tag,
+    )
+    if debug_save_dir:
+        mesh_out.export(os.path.join(debug_save_dir, f"debug_pruner_step4_final_{debug_tag}.stl"))
+
+    # 对比三个结果的顶点/面数
+    if debug_save_dir:
+        print(f"[PRUNER_FUN_DEBUG] {debug_tag}: "
+              f"input_faces={len(mesh.faces)}, "
+              f"no_collapse_faces={len(mesh_no_collapse.faces)}, "
+              f"final_faces={len(mesh_out.faces)}")
+
+    return mesh_out
 
 
 def compute_centroid(vertices):
@@ -629,7 +705,6 @@ def get_roi(mesh, centroid, size):
 
 def get_roi_from_upper_lower(mesh_jaw, mesh_beiya):
     mesh_jaw = get_roi(mesh_jaw, mesh_beiya.centroid, 10)
-    mesh_jaw = mesh_jaw.simplify_quadric_decimation(25000)
     mesh_jaw = get_biggest_mesh(mesh_jaw)
     return mesh_jaw
 
@@ -759,9 +834,15 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
         mesh_to_stitch_bound, mesh_to_stitch_bound_id = getBoundaryPoints(
             mesh_to_stitch
         )
-        mesh_to_stitch_trimesh = trimesh.Trimesh(mesh_to_stitch.vertices, mesh_to_stitch.triangles)
-        mask = np.isin(mesh_to_stitch_trimesh.edges_unique, mesh_to_stitch_bound_id).all(axis=1) 
-        bad_points_info = np.unique(mesh_to_stitch_trimesh.edges_unique[mask], return_counts=True)
+        mesh_to_stitch_trimesh = trimesh.Trimesh(
+            mesh_to_stitch.vertices, mesh_to_stitch.triangles
+        )
+        mask = np.isin(
+            mesh_to_stitch_trimesh.edges_unique, mesh_to_stitch_bound_id
+        ).all(axis=1)
+        bad_points_info = np.unique(
+            mesh_to_stitch_trimesh.edges_unique[mask], return_counts=True
+        )
         bad_points = bad_points_info[0][np.where(bad_points_info[1] >= 4)[0]]
         if len(bad_points):
             mesh_to_stitch.remove_vertices_by_index(bad_points)
@@ -769,7 +850,9 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
             mesh_to_stitch_bound, mesh_to_stitch_bound_id = getBoundaryPoints(
                 mesh_to_stitch
             )
-            mesh_to_stitch_trimesh = trimesh.Trimesh(mesh_to_stitch.vertices, mesh_to_stitch.triangles)
+            mesh_to_stitch_trimesh = trimesh.Trimesh(
+                mesh_to_stitch.vertices, mesh_to_stitch.triangles
+            )
         mesh_to_stitch_sort_idx = sort_and_remove_close_points(mesh_to_stitch_bound, 0)
         mesh_to_stitch_bound = mesh_to_stitch_bound[mesh_to_stitch_sort_idx]
         mesh_to_stitch_bound_id = mesh_to_stitch_bound_id[mesh_to_stitch_sort_idx]
@@ -780,13 +863,25 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
             for x in range(len(mesh_to_stitch_bound_id))
         ]
 
-        mask = (mesh_to_stitch_trimesh.edges[:, None] == np.array(mesh_to_stitch_edge)[:, ::-1]).all(axis=2).any(axis=0) 
+        mask = (
+            (
+                mesh_to_stitch_trimesh.edges[:, None]
+                == np.array(mesh_to_stitch_edge)[:, ::-1]
+            )
+            .all(axis=2)
+            .any(axis=0)
+        )
         if np.sum(mask) < len(mask) // 2:
-            mask = (mesh_to_stitch_trimesh.edges[:, None] == np.array(mesh_to_stitch_edge)).all(axis=2).any(axis=0) 
-        counts_a = np.unique(np.array(mesh_to_stitch_edge)[~mask].flatten(), return_counts=True)
+            mask = (
+                (mesh_to_stitch_trimesh.edges[:, None] == np.array(mesh_to_stitch_edge))
+                .all(axis=2)
+                .any(axis=0)
+            )
+        counts_a = np.unique(
+            np.array(mesh_to_stitch_edge)[~mask].flatten(), return_counts=True
+        )
         counts_b = np.unique(mesh_to_stitch_trimesh.faces, return_counts=True)
         bad_points = counts_a[0][np.where(counts_b[1][counts_a[0]] < 3)[0]]
-        
 
         dist_index = compute_distances(
             np.asarray(mesh_to_stitch.vertices)[mesh_to_stitch_edge],
@@ -839,16 +934,15 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
             else:
                 i_list = [x for x in range(i_0 + 1, i_1 + 1, 1)]
             mask = np.isin(i_list, used_egges, invert=True)
+            if len(used_egges) == 0 and i_list[0] == np.max(edge_after) and len(i_list) > 1:
+                mask[0] = False
             i_list = np.array(i_list)[mask]
             if len(i_list) == 0:
                 new_faces.append([p1, p0, b_0_1])
                 continue
-            # outer_points = mesh_before_stitch.vertices[edge_after[i_list]]
             outer_points = mesh_before_stitch.vertices[np.unique(edge_after[i_list])]
             p0_point = mesh_to_stitch.vertices[p0 - len(mesh_before_stitch.vertices)]
             p1_point = mesh_to_stitch.vertices[p1 - len(mesh_before_stitch.vertices)]
-            # dis_p0 = np.linalg.norm(p0_point - outer_points, axis=2)
-            # dis_p1 = np.linalg.norm(p1_point - outer_points, axis=2)
             dis_p0 = np.linalg.norm(p0_point - outer_points, axis=1)
             dis_p1 = np.linalg.norm(p1_point - outer_points, axis=1)
             min_idx = np.argmin(dis_p0 + dis_p1)
@@ -866,16 +960,30 @@ def stitch_(mesh_to_stitch, mesh_before_stitch, edge_after, type="inner"):
                 new_faces.append([p1, p0, edge_after[i_list[min_idx]][0]])
         else:
             if edge_idx == len(dist_index) - 1:
-                if used_egges[0] == i_0:
-                    new_faces.append([p1, p0, b_0_0])
+                if len(used_egges):
+                    if used_egges[0] == i_0:
+                        new_faces.append([p1, p0, b_0_0])
+                    else:
+                        new_faces.append([p1, p0, b_0_1])
                 else:
                     new_faces.append([p1, p0, b_0_1])
-            elif i_0 == np.max(edge_after):
-                new_faces.append([p1, p0, b_0_0])
+            elif i_0 == np.max(dist_index):
+                if i_0 in used_egges:
+                    new_faces.append([p1, p0, b_0_1])
+                else:
+                    if len(new_faces):
+                        if b_0_0 in new_faces[-1]:
+                            new_faces.append([p1, p0, b_0_0])
+                        else:
+                            new_faces.append([p1, p0, b_0_1])
+                    else:
+                        if i_0 == np.max(edge_after):
+                            new_faces.append([p1, p0, b_0_1])
+                        else:
+                            new_faces.append([p1, p0, b_0_0])
             else:
                 new_faces.append([p1, p0, b_0_1])
 
-        print
     if type == "outer":
         new_faces = np.array(new_faces)
         new_faces[:, :2] = new_faces[:, :2][:, ::-1]
@@ -1063,13 +1171,148 @@ def stitch_edge(mesh_out, mesh_inner):
     )
 
 
+def find_closest_numbers(x, keys):
+    """
+    在给定的键中查找最接近x的两个数字,一个比x大,一个比x小,且第一位相同
+
+    参数:
+        x: 目标数字
+        keys: 键的列表
+
+    返回:
+        tuple: (小于x的最接近数字, 大于x的最接近数字)
+    """
+    # 将字符串键转换为整数
+    numbers = [int(k) for k in keys]
+    # 获取x的第一位数字
+    x_first_digit = int(str(x)[0])
+
+    # 筛选出第一位数字相同的数字
+    same_first_digit = [n for n in numbers if int(str(n)[0]) == x_first_digit]
+
+    if not same_first_digit:
+        return None, None
+
+    # 分别找出小于和大于x的数字
+    smaller = [n for n in same_first_digit if n < x]
+    larger = [n for n in same_first_digit if n > x]
+
+    # 找出最接近的数字
+    closest_smaller = max(smaller) if smaller else None
+    closest_larger = min(larger) if larger else None
+
+    # 检查个位数是否为1或2
+    if closest_smaller is not None and int(str(closest_smaller)[-1]) in [1, 2]:
+        closest_smaller = None
+    if closest_larger is not None and int(str(closest_larger)[-1]) in [1, 2]:
+        closest_larger = None
+
+    return closest_smaller, closest_larger
+
+
+def get_matrix(pt1: trimesh.PointCloud, pt2: trimesh.PointCloud) -> np.array:
+    y1 = pt1.vertices[0] - np.mean([pt1.vertices[1], pt1.vertices[2]], axis=0)
+    y2 = pt2.vertices[0] - np.mean([pt2.vertices[1], pt2.vertices[2]], axis=0)
+    if (y1 + y2)[2] < 0:
+        m = trimesh.base.transformations.quaternion_about_axis(
+            np.arccos(np.dot(y1 + y2, [0, 1, 0]) / np.linalg.norm(y1 + y2)), [1, 0, 0]
+        )
+    else:
+        m = trimesh.base.transformations.quaternion_about_axis(
+            -np.arccos(np.dot(y1 + y2, [0, 1, 0]) / np.linalg.norm(y1 + y2)), [1, 0, 0]
+        )
+    matrix = trimesh.base.transformations.quaternion_matrix(m)
+    return matrix
+
+
+def transform_method_(
+    mesh_beiya: trimesh.Trimesh,
+    all_other_crowns: dict,
+    miss_id: str,
+    is_single: int,
+    pt1: List,
+    pt2: List,
+) -> np.array:
+    """
+    mesh_beiya:备牙
+    all_other_crowns:识别到的其他牙齿（不包括备牙）
+    miss_id:备牙牙号
+    is_single:是否是单邻牙,0表示双邻牙,1表示缺少近中邻牙,2表示缺少远中邻牙, 3表示无邻牙
+    pt1:近中邻牙kps
+    pt2:远中邻牙kps
+    """
+    # mesh1 = trimesh.Trimesh(mesh1[0], mesh1[1])
+    # mesh2 = trimesh.Trimesh(mesh2[0], mesh2[1])
+    # mesh_beiya = trimesh.Trimesh(mesh_beiya[0], mesh_beiya[1])
+
+    if int(miss_id) < 30:
+        up_low = 0  # up
+    else:
+        up_low = 1  # low
+
+    mesh1_id, mesh2_id = find_closest_numbers(int(miss_id), all_other_crowns.keys())
+    if mesh1_id is None:
+        if mesh2_id is None:
+            # extreme case: only one tooth detected
+            return np.identity(4), [
+                np.identity(4).tolist(),
+                np.identity(4).tolist(),
+                np.identity(4).tolist(),
+            ]
+        else:
+            mesh2 = read_mesh_bytes(all_other_crowns[str(mesh2_id)], type="trimesh")
+            axis_centroid = copy.deepcopy(mesh_beiya.centroid)
+            axis_centroid[1] = mesh2.centroid[1]
+            axis_x = axis_centroid - mesh2.centroid
+    else:
+        mesh1 = read_mesh_bytes(all_other_crowns[str(mesh1_id)], type="trimesh")
+        if mesh2_id is None:
+            axis_centroid = copy.deepcopy(mesh_beiya.centroid)
+            axis_centroid[1] = mesh1.centroid[1]
+            # axis_x = axis_centroid - mesh1.centroid
+            axis_x = mesh1.centroid - axis_centroid
+        else:
+            mesh2 = read_mesh_bytes(all_other_crowns[str(mesh2_id)], type="trimesh")
+            axis_x = mesh1.centroid - mesh2.centroid
+    if up_low:
+        rotation_matrix = np.matrix(
+            matrix_from_two_vectors(axis_x, np.array([0, 1, 0]))
+        ).I.__array__()
+    else:
+        rotation_matrix = np.matrix(
+            matrix_from_two_vectors(axis_x, np.array([0, -1, 0]))
+        ).I.__array__()
+    rotation_matrix = np.vstack(
+        (
+            np.hstack((rotation_matrix, np.zeros(3).reshape(-1, 1))),
+            np.array([[0, 0, 0, 1]]),
+        )
+    )
+    matrix = np.eye(4)
+    matrix[:3, 3] = mesh_beiya.centroid * -1
+    m = np.eye(4)
+    # if is_single != 3:
+    #     if pt1 and pt2:
+    #         pt1 = trimesh.PointCloud(pt1)
+    #         pt2 = trimesh.PointCloud(pt2)
+    #         pt1.apply_transform(rotation_matrix @ matrix)
+    #         pt2.apply_transform(rotation_matrix @ matrix)
+    #         m = get_matrix(pt1, pt2)
+    return np.array([rotation_matrix @ matrix, m]), [
+        rotation_matrix.tolist(),
+        matrix.tolist(),
+        m.tolist(),
+    ]
+
+
 if "__main__" == __name__:
-    import os
     import json
+    import os
     import traceback
+
     import pylfda
 
-    mesh_out = trimesh.load('test_data/c2/15_stitch_fixed_inlay_outer_47.ply')
-    mesh_inner = trimesh.load('test_data/c2/15.1_stitched_inlay_inner_47.ply')
+    mesh_out = trimesh.load("test_data/c2/mesh_out.ply")
+    mesh_inner = trimesh.load("test_data/c2/mesh_inner.ply")
     out = stitch_edge(mesh_out, mesh_inner)[0]
-    out.export('test_data/c2/out.stl') 
+    out.export("test_data/c2/out.stl")

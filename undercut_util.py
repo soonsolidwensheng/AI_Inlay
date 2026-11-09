@@ -224,6 +224,14 @@ def get_insert_direction_copy(
     """Visulize the computed minimum-undercut direction of a prep tooth"""
     bound_points, _ = getBoundaryPoints(prep_mesh)
     max_dist_boundary = max(cdist(np.asarray(prep_mesh.vertices), bound_points).min(axis=1))
+    prep_vertices = np.asarray(prep_mesh.vertices)
+    print(
+        "insert_direction_input | "
+        f"verts={len(prep_vertices)}, faces={len(prep_mesh.triangles)}, "
+        f"boundary_pts={len(bound_points)}, max_dist_boundary={max_dist_boundary:.6f}, "
+        f"bbox_min={np.round(prep_vertices.min(axis=0), 4).tolist()}, "
+        f"bbox_max={np.round(prep_vertices.max(axis=0), 4).tolist()}"
+    )
     # 加载网格文件
     s0 = time.time()
     # 连接准备网格和邻接网格
@@ -331,8 +339,20 @@ def get_insert_direction_copy(
     # 倒凹最小的前1/4个方向的平均值
     s2 = time.time()
     print(f"loop time: {s2 - s1}")
+    out_undercut_num = np.asarray(out_undercut_num, dtype=np.float64)
+    print(
+        "insert_direction_scores | "
+        f"count={len(out_undercut_num)}, min={out_undercut_num.min():.6f}, "
+        f"max={out_undercut_num.max():.6f}, mean={out_undercut_num.mean():.6f}, "
+        f"std={out_undercut_num.std():.6f}"
+    )
     min_indices_num = np.argsort(out_undercut_num)[: int(points.shape[0] / 4)]
     out_directions = points[min_indices_num]
+    print(
+        "insert_direction_candidates | "
+        f"selected={len(min_indices_num)}, best_score={out_undercut_num[min_indices_num[0]]:.6f}, "
+        f"quarter_score={out_undercut_num[min_indices_num[-1]]:.6f}"
+    )
     angles = angle_with_y_axis(out_directions)
     for i in range(len(angles)):
         if robust_outlier_detection(angles, i):
@@ -348,8 +368,10 @@ def get_insert_direction_copy(
     # out_direction = out_directions[0][np.newaxis, ...]
     # out_direction = points[np.argsort(out_undercut_num)[2]]
 
+    print(f"insert_direction_raw: {np.round(out_direction[0], 8).tolist()}")
     if out_direction[0][1] > 0:
         out_direction[0] *= -1.0
+    print(f"insert_direction_final: {np.round(out_direction[0], 8).tolist()}")
     return out_direction[0]
     # return out_direction[0], angle
     # if out_direction[1] > 0:

@@ -18,15 +18,10 @@ def std_morphing(std_crown, pre_crown):
     F_template = std_crown.faces.astype(np.int32)
     V_to = pre_crown.vertices.astype(np.float64)
     F_to = pre_crown.faces.astype(np.int32)
-
-    dstOrient = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    success, V_reg, F_reg = morph.GeneralRegistration(
-        V_template, F_template, V_to, F_to, 50, dstOrient, True
-    )
-    print("GeneralRegistration success:", success)
+    
     success, V_rebuild, F_rebuild = morph.ItersMorphingAndRebuild(
-        V_reg,
-        F_reg,
+        V_template,
+        F_template,
         V_to,
         F_to,
         isRemoveBoundary=True,

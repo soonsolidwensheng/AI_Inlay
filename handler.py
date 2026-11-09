@@ -111,6 +111,11 @@ def handler_webui_2(data_dir ='/output') -> None:
         with open(os.path.join(data_dir, 'gpu_result.json'), 'r') as f:
             gpu_res = json.load(f)
         tid = int(gpu_res['cpu_process_info']['beiya_id'])
+        paras = {}
+        if gpu_res.get("cement_gap") is not None:
+            paras["cement_gap"] = gpu_res["cement_gap"]
+        if gpu_res.get("cpu_process_info", {}).get("cement_gap") is not None:
+            paras["cement_gap"] = gpu_res["cpu_process_info"]["cement_gap"]
         adjacent_teeth = []
         if os.path.exists(os.path.join(data_dir, f'{tid+1}.stl')):
             adjacent_teeth.append(read_mesh(os.path.join(data_dir, f'{tid+1}.stl')))
@@ -118,7 +123,7 @@ def handler_webui_2(data_dir ='/output') -> None:
             adjacent_teeth.append(read_mesh(os.path.join(data_dir, f'{tid-1}.stl')))
         
         # run inlay gen
-        IG = InlayGeneration(tid, prep_tooth, inlay_inner, upper, lower, adjacent_teeth, standard, save_path=os.path.join(data_dir, 'intermediate_results'))
+        IG = InlayGeneration(tid, prep_tooth, inlay_inner, upper, lower, adjacent_teeth, standard, save_path=os.path.join(data_dir, 'intermediate_results'), paras=paras)
         IG.run()
         # get and save stitched inlay
         inlay_outer = IG.get_inlay_outer()

@@ -96,7 +96,10 @@ def postprocess_msg(msg):
     ]
     data_input["standard"] = read_mesh_bytes(msg.get("stdcrown"))
     data_input["tid"] = int(msg.get("beiya_id"))
-    data_input["paras"] = msg.get("paras")
+    paras = msg.get("paras") or {}
+    if msg.get("cement_gap") is not None:
+        paras["cement_gap"] = msg.get("cement_gap")
+    data_input["paras"] = paras
     po_out = postprocess_run(data_input)
     data_output = {
         "Msg": {

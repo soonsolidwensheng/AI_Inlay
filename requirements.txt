@@ -9,3 +9,7 @@ rtree==1.4.0
 geomdl==5.4.0
 python-fcl==0.7.0.6
 pymeshlab==2023.12.post2
+pytransform3d==3.14.4
+Flask==2.2.5
+waitress==2.1.2
+shapely==2.0.1

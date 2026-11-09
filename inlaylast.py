@@ -320,31 +320,46 @@ def findNearFaceByPoints(points, bm, inlayObj, p_size=1.0 ):
     
 #debug_view.close()   
 
+from bpy_extras import object_utils
 
 def convertMesh(name, verts, faces):
+    """
+    将顶点和面创建为 Blender Mesh，自动去除重复顶点并更新面索引。
+    """
+    verts = np.array(verts, dtype=np.float64)   # 顶点浮点数
+    faces = np.array(faces, dtype=np.int64)     # 面索引整数
+
+    # 去重顶点并生成映射
+    unique_verts, inverse_idx = np.unique(verts, axis=0, return_inverse=True)
+    new_faces = inverse_idx[faces]  # 更新面索引
+
+    # 创建 bmesh
     mesh = bpy.data.meshes.new(name=name)
     bm = bmesh.new()
     bResult = True
-    num_vertices = verts.shape[0]
 
-    for v_co in verts:
-        bm.verts.new( v_co )
-
-        
+    # 添加顶点
+    for v_co in unique_verts:
+        bm.verts.new(v_co)
     bm.verts.ensure_lookup_table()
-    
-    try:
-        for f_idx in faces:
-            bm.faces.new( bm.verts[i] for i in f_idx )
-    except:
-        bResult = False
-    bm.to_mesh( mesh )
-    
+
+    # 添加面
+    for f_idx in new_faces:
+        try:
+            bm.faces.new([bm.verts[i] for i in f_idx])
+        except ValueError as e:
+            print(f"Failed to create face {f_idx}: {e}")
+            bResult = False
+
+    # 写入 mesh 并释放 bmesh
+    bm.to_mesh(mesh)
+    bm.free()
     mesh.update()
-    
-    from bpy_extras import object_utils
-    object_utils.object_data_add( bpy.context, mesh )
+
+    # 添加到场景
+    object_utils.object_data_add(bpy.context, mesh)
     bpy.context.active_object.name = name
+
     return bResult
 
 
@@ -1010,12 +1025,7 @@ def to_objects( crown_verts, crown_faces, inlay_verts, inlay_faces ):
     crownObj = bpy.context.active_object    
     return inlayObj, crownObj
     
-def inlayAdjust_file(crown_filepath, inlay_filepath):
-    crown_verts, crown_faces = loadStl( crown_filepath )
-    
-    
-    inlay_verts, inlay_faces = loadStl( inlay_filepath )
-    #return inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces )
+
     
 def firstFindCrownObj():
     for i in bpy.data.objects:
@@ -1047,8 +1057,7 @@ def inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces, oc_verts = N
 
     
     out_verts = np.array([ v.co for v in crownObj.data.vertices ])
-    out_faces = np.array([tuple(polygon.vertices) for polygon in crownObj.data.polygons[:]], dtype="object")
-
+    out_faces = np.array([tuple(p.vertices) for p in crownObj.data.polygons], dtype=object)
     bpy.ops.outliner.orphans_purge()
     
     return out_verts, out_faces
@@ -2036,6 +2045,15 @@ def inlayPostWarp(surface_verts, surface_faces,inlay_verts, inlay_faces, shell_v
         bpy.ops.object.editmode_toggle()
     return tri_mesh
     
+def inlayAdjust_file(crown_filepath, inlay_filepath):
+    crown_verts, crown_faces = loadStl( crown_filepath )
+    
+    
+    inlay_verts, inlay_faces = loadStl( inlay_filepath )
+    out_verts, out_faces = inlayAdjust(crown_verts, crown_faces, inlay_verts, inlay_faces )
+    
+    
+    # print( len(out_verts), len(out_faces) )
     
 test_first_thickness = False
 if __name__ == '__main__':
